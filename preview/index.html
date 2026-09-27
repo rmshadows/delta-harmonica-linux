@@ -1,0 +1,2543 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>口琴简谱预览 · delta-harmonica</title>
+  <style>
+    :root {
+      --bg: #1a1f24;
+      --panel: #242b33;
+      --ink: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #d4a574;
+      --key: #3a4552;
+      --key-on: #c9a227;
+      --mod: #2f3944;
+      --mod-on: #5a8f7b;
+      --err: #e07a5f;
+      --ok: #81b29a;
+      --font: "IBM Plex Sans", "Noto Sans SC", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(ellipse 80% 50% at 20% 0%, #2a3340 0%, transparent 55%),
+        var(--bg);
+      color: var(--ink);
+      font-family: var(--font);
+      line-height: 1.45;
+    }
+    main {
+      --main-max: 1280px;
+      max-width: var(--main-max);
+      margin: 0 auto;
+      padding: 1.5rem 1.25rem 3rem;
+      padding-top: 4.25rem;
+      position: relative;
+    }
+    .main-width-handle {
+      position: absolute;
+      top: 4.25rem;
+      right: 0;
+      bottom: 3rem;
+      width: 8px;
+      cursor: ew-resize;
+      background: transparent;
+      border-radius: 4px;
+      z-index: 5;
+    }
+    .main-width-handle:hover,
+    .main-width-handle.dragging {
+      background: var(--accent);
+      opacity: 0.85;
+    }
+    .main-width-handle::after {
+      content: "";
+      position: absolute;
+      inset: 0 -6px;
+    }
+    .transport {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 100;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      padding: 0.55rem 1rem;
+      background: rgba(26, 31, 36, 0.92);
+      border-bottom: 1px solid #3a4552;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+    }
+    .transport .hint {
+      color: var(--muted);
+      font-size: 0.78rem;
+      margin-left: auto;
+      font-family: var(--mono);
+    }
+    @media (max-width: 720px) {
+      .transport .hint { display: none; }
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      margin: 0 0 0.25rem;
+    }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.25rem; }
+    .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
+    button, label.file {
+      appearance: none;
+      border: 1px solid #4a5664;
+      background: var(--panel);
+      color: var(--ink);
+      border-radius: 8px;
+      padding: 0.45rem 0.9rem;
+      font: inherit;
+      cursor: pointer;
+    }
+    button.primary { background: var(--accent); color: #1a1410; border-color: transparent; font-weight: 600; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    label.file input { display: none; }
+    select, input[type="number"] {
+      background: var(--panel);
+      color: var(--ink);
+      border: 1px solid #4a5664;
+      border-radius: 8px;
+      padding: 0.4rem 0.6rem;
+      font: inherit;
+    }
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      resize: vertical;
+      background: #14191e;
+      color: var(--ink);
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+      padding: 0.85rem 1rem;
+      font-family: var(--mono);
+      font-size: 0.92rem;
+      line-height: 1.5;
+    }
+    .status { min-height: 1.4em; font-size: 0.9rem; color: var(--muted); }
+    .status.err { color: var(--err); }
+    .status.ok { color: var(--ok); }
+
+    .harmonica {
+      margin: 1.25rem 0 1rem;
+      padding: 1rem 1rem 1.1rem;
+      background: linear-gradient(180deg, #2c343e, #1e252c);
+      border-radius: 16px;
+      border: 1px solid #3d4854;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    .mods, .notes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      justify-content: center;
+    }
+    .mods { margin-bottom: 0.65rem; }
+    .key {
+      min-width: 3.1rem;
+      height: 3.1rem;
+      border-radius: 999px;
+      border: 1px solid #556273;
+      background: var(--key);
+      color: var(--ink);
+      display: grid;
+      place-items: center;
+      font-weight: 600;
+      font-size: 0.95rem;
+      transition: background 0.08s, transform 0.08s, box-shadow 0.08s;
+      user-select: none;
+    }
+    .key.mod { min-width: 4.2rem; background: var(--mod); font-size: 0.78rem; }
+    .key.on { background: var(--key-on); color: #1a1410; transform: translateY(2px); box-shadow: 0 0 0 2px #f0d78c55; }
+    .key.mod.on { background: var(--mod-on); color: #0f1a16; }
+    .now {
+      text-align: center;
+      margin-top: 0.85rem;
+      font-family: var(--mono);
+      font-size: 1.05rem;
+      color: var(--accent);
+      min-height: 1.4em;
+    }
+    details { margin-top: 1rem; color: var(--muted); font-size: 0.88rem; }
+    details summary { cursor: pointer; color: var(--ink); }
+
+    .progress-wrap {
+      margin: 0.85rem 0 0.35rem;
+      padding: 0.65rem 0.85rem;
+      background: var(--panel);
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+    }
+    .progress-wrap input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .progress-time {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+    }
+    .lyrics-panel {
+      margin: 0.5rem 0 1rem;
+      max-height: 140px;
+      overflow: auto;
+      padding: 0.5rem 0.35rem;
+      background: #14191e;
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+    }
+    .score-panel {
+      margin: 0;
+      height: 100%;
+      max-height: none;
+      overflow: auto;
+      padding: 0;
+      background: #14191e;
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }
+    .score-workspace {
+      --split-v: 10px;
+      display: grid;
+      grid-template-columns: 1fr var(--split-v) 1fr;
+      grid-template-rows: 1fr 10px;
+      gap: 0;
+      align-items: stretch;
+      margin: 0.5rem 0 0.75rem;
+      min-height: 280px;
+      height: min(58vh, 640px);
+      position: relative;
+    }
+    #scoreColPreview { grid-column: 1; grid-row: 1; }
+    #scoreSplitV { grid-column: 2; grid-row: 1; }
+    #scoreColEdit { grid-column: 3; grid-row: 1; }
+    #scoreSplitH { grid-column: 1 / -1; grid-row: 2; }
+    .score-col {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      min-height: 0;
+      height: 100%;
+    }
+    .score-col .panel-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin: 0 0 0.35rem;
+      flex-shrink: 0;
+    }
+    .score-col .score-panel {
+      flex: 1;
+      min-height: 0;
+    }
+    .score-split-v {
+      cursor: col-resize;
+      background: #3a4552;
+      border-radius: 4px;
+      margin: 1.55rem 2px 0;
+      position: relative;
+      z-index: 2;
+      background-image: radial-gradient(circle, #8b9aab 1.1px, transparent 1.2px);
+      background-size: 100% 10px;
+      background-position: center;
+      background-repeat: repeat-y;
+    }
+    .score-split-v:hover,
+    .score-split-v.dragging { background-color: var(--accent); background-image: none; }
+    .score-split-v::after {
+      content: "";
+      position: absolute;
+      inset: 0 -6px;
+    }
+    .score-split-h {
+      cursor: row-resize;
+      background: #3a4552;
+      border-radius: 4px;
+      margin-top: 4px;
+      position: relative;
+      z-index: 2;
+      background-image: radial-gradient(circle, #8b9aab 1.1px, transparent 1.2px);
+      background-size: 10px 100%;
+      background-position: center;
+      background-repeat: repeat-x;
+    }
+    .score-split-h:hover,
+    .score-split-h.dragging { background-color: var(--accent); background-image: none; }
+    .score-split-h::after {
+      content: "";
+      position: absolute;
+      inset: -6px 0;
+    }
+    .ed-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.65rem;
+      flex-wrap: wrap;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .ed-toolbar label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      cursor: pointer;
+      user-select: none;
+    }
+    .ed-toolbar input[type="checkbox"] {
+      accent-color: var(--accent);
+      margin: 0;
+    }
+    /* 行号 + 当前行高亮编辑器 */
+    .code-editor {
+      --ed-lh: 22px;
+      --ed-fs: 14px;
+      --ed-pad-y: 12px;
+      --ed-pad-x: 14px;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+      background: #14191e;
+      overflow: hidden;
+    }
+    .code-gutter {
+      flex: 0 0 auto;
+      min-width: 2.75rem;
+      padding: var(--ed-pad-y) 0.45rem var(--ed-pad-y) 0.35rem;
+      background: #10151a;
+      border-right: 1px solid #2a3340;
+      color: #667788;
+      font-family: var(--mono);
+      font-size: var(--ed-fs);
+      line-height: var(--ed-lh);
+      text-align: right;
+      user-select: none;
+      overflow: hidden;
+      white-space: pre;
+    }
+    .code-gutter .ln { display: block; padding-right: 0.15rem; }
+    .code-gutter .ln.cur { color: var(--accent); font-weight: 600; }
+    .code-gutter .ln.play { color: #6ec9a8; font-weight: 600; }
+    .code-gutter .ln.cur.play { color: #e8c27a; }
+    .code-main {
+      position: relative;
+      flex: 1;
+      min-width: 0;
+      min-height: 0;
+    }
+    /* 光标所在行：暖色 */
+    .code-line-hl {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: var(--ed-lh);
+      top: var(--ed-pad-y);
+      background: #3d342055;
+      box-shadow: inset 2px 0 0 var(--accent);
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0;
+    }
+    .code-line-hl.on { opacity: 1; }
+    /* 播放行：青绿，与光标行区分 */
+    .code-play-hl {
+      position: absolute;
+      left: 0;
+      right: 0;
+      height: var(--ed-lh);
+      top: var(--ed-pad-y);
+      background: #1e3d3444;
+      box-shadow: inset 2px 0 0 #5a8f7b;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0;
+    }
+    .code-play-hl.on { opacity: 1; }
+    .score-col textarea#score {
+      position: relative;
+      z-index: 1;
+      display: block;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      margin: 0;
+      resize: none;
+      border: none;
+      border-radius: 0;
+      background: transparent;
+      color: var(--ink);
+      white-space: pre;
+      overflow: auto;
+      overflow-wrap: normal;
+      word-break: normal;
+      tab-size: 2;
+      font-family: var(--mono);
+      font-size: var(--ed-fs);
+      line-height: var(--ed-lh);
+      padding: var(--ed-pad-y) var(--ed-pad-x);
+      outline: none;
+    }
+    .code-editor.wrap textarea#score {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .code-gutter .ln {
+      box-sizing: border-box;
+      overflow: hidden;
+    }
+    .code-wrap-probe {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      visibility: hidden;
+      pointer-events: none;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      font-family: var(--mono);
+      font-size: var(--ed-fs, 14px);
+      line-height: var(--ed-lh, 22px);
+      padding: 0;
+      margin: 0;
+      border: 0;
+    }
+    @media (max-width: 900px) {
+      .score-workspace {
+        display: flex !important;
+        flex-direction: column;
+        height: min(70vh, 720px);
+      }
+      .score-split-v { display: none; }
+      .score-col { flex: 1 1 0; min-height: 140px; }
+      .score-split-h { flex: 0 0 8px; width: 100%; }
+    }
+    .score-line {
+      display: grid;
+      grid-template-columns: 3.2rem 1fr;
+      gap: 0.5rem;
+      padding: 0.12rem 0.65rem;
+      color: #9aa8b8;
+      width: 100%;
+      text-align: left;
+      cursor: pointer;
+      font: inherit;
+      box-sizing: border-box;
+    }
+    .score-line:hover { background: #1e262e; color: var(--ink); }
+    .score-line .ln {
+      color: #667788;
+      user-select: none;
+      text-align: right;
+    }
+    .score-line .tx {
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: #c5d0dc;
+    }
+    .score-line.active {
+      background: #3d3420;
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .score-line.active .ln { color: var(--accent); }
+    .score-line.active .tx { color: #f0e6d2; font-weight: 600; }
+    .score-line.empty .tx { color: #44505c; }
+    .score-line:focus { outline: none; }
+    .panel-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+      margin: 0.35rem 0 0.15rem;
+    }
+    .lyric-line {
+      padding: 0.25rem 0.65rem;
+      border-radius: 6px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+    .lyric-line:hover { color: var(--ink); background: #1e262e; }
+    .lyric-line.aux-active {
+      color: var(--ink);
+      background: #2a3340;
+      outline: 1px solid #4a5664;
+    }
+    .lyric-line.muted { cursor: default; }
+    .lyric-line.active {
+      /* legacy unused — score chips are the main highlight */
+    }
+    .record-panel {
+      margin: 0.75rem 0;
+      padding: 0.85rem 1rem;
+      background: var(--panel);
+      border: 1px solid #3a4552;
+      border-radius: 10px;
+    }
+    .record-panel.rec-on {
+      border-color: #c45c5c;
+      box-shadow: 0 0 0 1px #c45c5c55;
+    }
+    .record-panel h2 {
+      margin: 0 0 0.5rem;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    .keymap {
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.55;
+      margin: 0.5rem 0 0.75rem;
+      white-space: pre-wrap;
+    }
+    .rec-draft {
+      width: 100%;
+      min-height: 110px;
+      resize: vertical;
+      background: #14191e;
+      color: var(--ink);
+      border: 1px solid #3a4552;
+      border-radius: 8px;
+      padding: 0.6rem 0.75rem;
+      font-family: var(--mono);
+      font-size: 0.85rem;
+    }
+    .rec-dot {
+      display: inline-block;
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      background: #666;
+      margin-right: 0.35rem;
+    }
+    .rec-dot.on { background: #e05a5a; box-shadow: 0 0 6px #e05a5a; }
+  </style>
+</head>
+<body>
+  <div class="transport" id="transport">
+    <button type="button" class="primary" id="btnPlay">播放</button>
+    <button type="button" id="btnStop">停止</button>
+    <button type="button" id="btnSaveScore" title="保存到 scores/*.txt">保存乐谱</button>
+    <button type="button" id="btnRec">● 录制</button>
+    <label class="file">打开 .txt<input type="file" id="file" accept=".txt,text/plain" /></label>
+    <label>乐谱
+      <select id="preset">
+        <option value="">（粘贴/打开文件）</option>
+      </select>
+    </label>
+    <span class="hint">Space 播/停 · Esc 停 · Ctrl+S 存盘 · Ctrl+Space 全局播</span>
+  </div>
+  <main>
+    <h1>口琴简谱预览 <span style="font-weight:400;color:var(--muted);font-size:0.85rem">· debug</span></h1>
+    <p class="sub">左边高亮对照、右边改谱，改完 <strong>Ctrl+S</strong> /「保存乐谱」写回 <code>scores/</code>。数字键可录制。</p>
+
+    <div class="record-panel" id="recordPanel">
+      <h2><span class="rec-dot" id="recDot"></span>键盘录制 <span id="recStatus" style="color:var(--muted);font-weight:400;font-size:0.9rem">未开始</span></h2>
+      <div class="keymap">数字键（九宫格 / 上方数字）只负责音符，按住发声、松手记时值:
+  7 8 9  →  7 · 1' · （9 不用）
+  4 5 6  →  4 · 5 · 6
+  1 2 3  →  1 · 2 · 3
+字母键：按住改调性，松开恢复自然音
+  Q 半音(+1) ·  W 降调(-八度) ·  E 升调(+八度)
+停顿：两音之间停多久，就自动记多久休止（0:毫秒），不用按休止键
+录制: R 开关 · Enter 结束本句填歌词 · Backspace 删上一音 · 写入用「写入乐谱」按钮</div>
+      <div class="row">
+        <button type="button" id="btnRecPhrase">本句结束 Enter</button>
+        <button type="button" id="btnRecUndo">删上一音</button>
+        <button type="button" id="btnRecClear">清空录制</button>
+        <button type="button" class="primary" id="btnRecCommit">写入乐谱</button>
+        <label>录制 BPM <input type="number" id="recBpm" value="78" min="40" max="200" step="1" style="width:4.5rem" /></label>
+        <label>休止 × <input type="number" id="restScale" value="1" min="0.2" max="3" step="0.05" style="width:4.5rem" title="播放时整体缩放所有休止；可写入乐谱 rest_scale" /></label>
+        <button type="button" id="btnSaveRestScale">写入 rest_scale</button>
+      </div>
+      <textarea class="rec-draft" id="recDraft" readonly placeholder="录制内容会出现在这里…"></textarea>
+    </div>
+    <div class="row" id="tempoRow" title="在此区域滚动鼠标滚轮可调速">
+      <button type="button" id="btnSlower">−</button>
+      <label>速度 × <input type="number" id="speed" value="1" min="0.5" max="2.5" step="0.05" style="width:4.5rem" /></label>
+      <button type="button" id="btnFaster">+</button>
+      <span id="bpmReadout" style="color:var(--muted);font-family:var(--mono)">谱面 BPM — · 实际 —</span>
+      <button type="button" id="btnSaveBpm">将当前速度写入乐谱…</button>
+    </div>
+
+    <div class="harmonica" aria-label="口琴按键预览">
+      <div class="mods">
+        <div class="key mod" data-mod="semitone" title="+1 半音">半音</div>
+        <div class="key mod" data-mod="sharp" title="+1 八度">升调</div>
+        <div class="key mod" data-mod="natural" title="自然音（默认）">自然音</div>
+        <div class="key mod" data-mod="flat" title="-1 八度">降调</div>
+      </div>
+      <div class="notes">
+        <div class="key" data-pitch="1">1</div>
+        <div class="key" data-pitch="2">2</div>
+        <div class="key" data-pitch="3">3</div>
+        <div class="key" data-pitch="4">4</div>
+        <div class="key" data-pitch="5">5</div>
+        <div class="key" data-pitch="6">6</div>
+        <div class="key" data-pitch="7">7</div>
+        <div class="key" data-pitch="1'">1̇</div>
+      </div>
+      <div class="now" id="nowPlaying">—</div>
+    </div>
+
+    <div class="progress-wrap">
+      <input type="range" id="progress" min="0" max="1000" value="0" step="1" />
+      <div class="progress-time">
+        <span id="timeCur">0:00</span>
+        <span id="timeLabel">拖动可跳转</span>
+        <span id="timeTotal">0:00</span>
+      </div>
+    </div>
+
+    <div class="score-workspace" id="scoreWorkspace">
+      <div class="score-col" id="scoreColPreview">
+        <div class="panel-label">
+          <span>高亮对照 · 单击播一句 · 双击从此播</span>
+          <span id="scorePathLabel" style="font-family:var(--mono);font-size:0.75rem"></span>
+        </div>
+        <div class="score-panel" id="scorePanel" aria-label="乐谱原文"></div>
+      </div>
+      <div class="score-split-v" id="scoreSplitV" title="拖动调整左右宽度"></div>
+      <div class="score-col" id="scoreColEdit">
+        <div class="panel-label">
+          <span>编辑乐谱</span>
+          <span class="ed-toolbar">
+            <label title="长行自动折到下一视觉行"><input type="checkbox" id="chkWrap" /> 自动换行</label>
+            <span id="dirtyLabel" style="color:var(--accent)"></span>
+          </span>
+        </div>
+        <div class="code-editor" id="codeEditor">
+          <div class="code-gutter" id="codeGutter" aria-hidden="true"></div>
+          <div class="code-main">
+            <div class="code-play-hl" id="codePlayHl"></div>
+            <div class="code-line-hl" id="codeLineHl"></div>
+            <textarea id="score" spellcheck="false" placeholder="在此编辑简谱… Ctrl+S 保存"></textarea>
+          </div>
+          <div class="code-wrap-probe" id="codeWrapProbe" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="score-split-h" id="scoreSplitH" title="拖动调整高度"></div>
+    </div>
+    <div class="main-width-handle" id="mainWidthHandle" title="拖动调整整页宽度"></div>
+    <div class="panel-label">歌词辅助（可选）</div>
+    <div class="lyrics-panel" id="lyricsPanel" aria-label="歌词辅助"></div>
+    <p class="status" id="status"></p>
+
+    <details>
+      <summary>语法速查</summary>
+      <p><code>title</code> / <code>bpm</code>；<code>&gt; 歌词</code> 标句。<code>s</code>半音 <code>#</code>升八度 <code>b</code>降八度。<code>0/8</code> 休止；<code>|</code> 小节线。<code>/4.</code> 附点。</p>
+    </details>
+  </main>
+
+  <script>
+    const PRESETS = {};
+
+    const DUR_BEATS = { "1": 4, "2": 2, "4": 1, "8": 0.5, "16": 0.25 };
+    const TOKEN_RE = /^(?<semi>s)?(?<acc>#{1,3}|b{1,3})?(?<pitch>0|[1-7]'?)(?:\/(?<dur>1|2|4|8|16))?$/;
+    const DEGREE_SEMI = { "1": 0, "2": 2, "3": 4, "4": 5, "5": 7, "6": 9, "7": 11, "1'": 12 };
+
+    function octaveCount(acc) {
+      if (!acc) return 0;
+      return acc[0] === "#" ? acc.length : acc[0] === "b" ? -acc.length : 0;
+    }
+
+    function accLabel(mod, octaves) {
+      if (mod === "semitone") return "s";
+      if (octaves > 0) return "#".repeat(octaves);
+      if (octaves < 0) return "b".repeat(-octaves);
+      if (mod === "sharp") return "#";
+      if (mod === "flat") return "b";
+      return "";
+    }
+
+    /** Phone UI: ##1 → 升调 + 1' */
+    function phonePitch(pitch, mod, octaves) {
+      if (mod === "semitone") return { pitch, mod };
+      if (octaves >= 2 && pitch === "1") return { pitch: "1'", mod: "sharp" };
+      if (octaves <= -2 && pitch === "1'") return { pitch: "1", mod: "flat" };
+      return { pitch, mod };
+    }
+
+    function durMs(msBeat, dur, dotted) {
+      let beats = DUR_BEATS[dur || "4"];
+      if (dotted) beats *= 1.5;
+      return Math.round(msBeat * beats);
+    }
+
+    function parseScore(text) {
+      let title = "untitled", bpm = null, msBeat = null, register = 2, restScale = 1;
+      const tokens = []; // { raw, line }
+      const lyrics = [];
+      const sourceLines = text.split(/\r?\n/);
+      for (let i = 0; i < sourceLines.length; i++) {
+        const lineno = i + 1;
+        let line = sourceLines[i].trim();
+        if (!line) continue;
+        if (line.startsWith(">") && !line.startsWith(">>")) {
+          const lyric = line.slice(1).trim();
+          if (lyric) {
+            lyrics.push(lyric);
+            tokens.push({ raw: "__LYRIC__" + lyric, line: lineno });
+          }
+          continue;
+        }
+        if (/^#(\s|$)/.test(line)) continue;
+        const meta = /^(title|bpm|ms_beat|register|rest_scale)\s*:\s*(.+?)\s*$/i.exec(line);
+        if (meta && tokens.length === 0) {
+          const k = meta[1].toLowerCase(), v = meta[2].trim();
+          if (k === "title") title = v;
+          else if (k === "bpm") bpm = parseFloat(v);
+          else if (k === "ms_beat") msBeat = parseFloat(v);
+          else if (k === "rest_scale") restScale = parseFloat(v);
+          else if (k === "register") {
+            register = parseInt(v, 10);
+            if (![1, 2, 3].includes(register)) throw new Error("register 必须是 1..3");
+          }
+          continue;
+        }
+        line = line.replace(/\s+#\s.*$/, "").trim();
+        if (!line) continue;
+        // 连音线：5/16 + 5/8 → 5/16+5/8
+        line = line.replace(/\s*\+\s*/g, "+");
+        for (const tok of line.split(/\s+/)) {
+          if (tok === "|") continue;
+          tokens.push({ raw: tok, line: lineno });
+        }
+      }
+      if (msBeat == null) {
+        if (bpm == null) bpm = 96;
+        if (bpm <= 0) throw new Error("bpm 无效");
+        msBeat = 60000 / bpm;
+      } else if (bpm == null) {
+        bpm = 60000 / msBeat;
+      }
+      if (!(restScale > 0)) restScale = 1;
+
+      const events = [{ type: "register", register, line: 0 }];
+      let lastReg = register;
+
+      function appendRest(ms, lineno, tied) {
+        const last = events[events.length - 1];
+        if (tied && last && last.type === "rest") {
+          last.ms += ms;
+          return;
+        }
+        events.push({ type: "rest", ms, line: lineno });
+      }
+
+      function appendNote(pitch, mod, octaves, ms, lineno, tied) {
+        const last = events[events.length - 1];
+        if (
+          tied &&
+          last &&
+          last.type === "note" &&
+          last.pitch === pitch &&
+          last.mod === mod &&
+          (last.octaves || 0) === (octaves || 0)
+        ) {
+          last.ms += ms;
+          return;
+        }
+        events.push({ type: "note", pitch, mod, octaves, ms, register: lastReg, line: lineno });
+      }
+
+      function parseAtomic(tok, lineno, tied) {
+        if (tok === "-" || tok === "0") {
+          appendRest(durMs(msBeat, "4", false), lineno, tied);
+          return;
+        }
+        if (/^@[123]$/.test(tok)) {
+          if (tied) throw new Error("连音线不能接音域: " + tok + " (L" + lineno + ")");
+          const r = parseInt(tok[1], 10);
+          if (lastReg === r && events[events.length - 1]?.type === "register") return;
+          lastReg = r;
+          events.push({ type: "register", register: r, line: lineno });
+          return;
+        }
+        const absRest = /^0:(\d+)$/.exec(tok);
+        if (absRest) {
+          appendRest(Math.max(1, parseInt(absRest[1], 10)), lineno, tied);
+          return;
+        }
+        const absNote = /^(?<semi>s)?(?<acc>#{1,3}|b{1,3})?(?<pitch>[1-7]'?):(?<ms>\d+)$/.exec(tok);
+        if (absNote) {
+          const { semi, acc, pitch, ms } = absNote.groups;
+          let mod = "natural";
+          let octaves = 0;
+          if (semi) mod = "semitone";
+          else {
+            octaves = octaveCount(acc);
+            if (octaves > 0) mod = "sharp";
+            else if (octaves < 0) mod = "flat";
+          }
+          appendNote(pitch, mod, octaves, Math.max(1, parseInt(ms, 10)), lineno, tied);
+          return;
+        }
+        let dotted = false;
+        let t = tok;
+        if (/\/(1|2|4|8|16)\.$/.test(t)) {
+          dotted = true;
+          t = t.slice(0, -1);
+        }
+        const mRest = /^-\/(?<dur>1|2|4|8|16)$/.exec(t);
+        if (mRest) {
+          appendRest(durMs(msBeat, mRest.groups.dur, dotted), lineno, tied);
+          return;
+        }
+        const m = TOKEN_RE.exec(t);
+        if (!m || m[0] !== t) throw new Error("无法解析: " + tok + " (L" + lineno + ")");
+        const { semi, acc, pitch, dur } = m.groups;
+        const ms = durMs(msBeat, dur, dotted);
+        if (pitch === "0") {
+          appendRest(ms, lineno, tied);
+          return;
+        }
+        if (!(pitch in DEGREE_SEMI)) throw new Error("未知音高: " + pitch);
+        let mod = "natural";
+        let octaves = 0;
+        if (semi) mod = "semitone";
+        else {
+          octaves = octaveCount(acc);
+          if (octaves > 0) mod = "sharp";
+          else if (octaves < 0) mod = "flat";
+        }
+        appendNote(pitch, mod, octaves, ms, lineno, tied);
+      }
+
+      for (const { raw: tok, line: lineno } of tokens) {
+        if (tok.startsWith("__LYRIC__")) {
+          events.push({ type: "lyric", text: tok.slice("__LYRIC__".length), line: lineno });
+          continue;
+        }
+        const parts = tok.split("+");
+        if (parts.some((p) => !p)) throw new Error("无法解析连音: " + tok + " (L" + lineno + ")");
+        for (let i = 0; i < parts.length; i++) parseAtomic(parts[i], lineno, i > 0);
+      }
+      return { title, bpm, msBeat, register, events, lyrics, restScale, sourceLines };
+    }
+
+    function midiFreq(midi) {
+      return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+
+    function noteToMidi(pitch, mod, octaves = 0) {
+      // 固定中音区；每个 # / b = ±1 八度（##1 = +24）
+      let midi = 60 + DEGREE_SEMI[pitch];
+      if (mod === "semitone") midi += 1;
+      else if (octaves) midi += 12 * octaves;
+      else if (mod === "sharp") midi += 12;
+      else if (mod === "flat") midi -= 12;
+      return midi;
+    }
+
+    let audioCtx = null;
+    let masterGain = null;
+    let playToken = 0;
+    let scheduledVoices = []; // { osc, gain }
+    let liveVoice = null; // manual hold: { osc, gain }
+
+    function ensureAudio() {
+      if (!audioCtx || audioCtx.state === "closed") {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 1;
+        masterGain.connect(audioCtx.destination);
+      }
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      if (!masterGain) {
+        masterGain = audioCtx.createGain();
+        masterGain.gain.value = 1;
+        masterGain.connect(audioCtx.destination);
+      }
+      return audioCtx;
+    }
+
+    function silenceScheduled() {
+      const ctx = audioCtx;
+      const now = ctx && ctx.state !== "closed" ? ctx.currentTime : 0;
+      for (const v of scheduledVoices) {
+        try {
+          if (v.gain) {
+            v.gain.gain.cancelScheduledValues(now);
+            v.gain.gain.setValueAtTime(0.0001, now);
+          }
+          if (v.osc) v.osc.stop(now);
+        } catch (_) { /* already stopped */ }
+        try { v.osc && v.osc.disconnect(); } catch (_) {}
+        try { v.gain && v.gain.disconnect(); } catch (_) {}
+      }
+      scheduledVoices = [];
+      if (masterGain && ctx && ctx.state !== "closed") {
+        try {
+          masterGain.gain.cancelScheduledValues(now);
+          masterGain.gain.setValueAtTime(0, now);
+        } catch (_) {}
+      }
+    }
+
+    /** Game-like: sound while held, silence when released. */
+    function holdTone(freq, durationSec, when) {
+      const ctx = ensureAudio();
+      if (masterGain) masterGain.gain.setValueAtTime(1, ctx.currentTime);
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const attack = 0.015;
+      const release = 0.04;
+      const sustain = 0.2;
+      const end = when + Math.max(durationSec, attack + release);
+
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(freq, when);
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(1400, when);
+
+      gain.gain.setValueAtTime(0.0001, when);
+      gain.gain.exponentialRampToValueAtTime(sustain, when + attack);
+      gain.gain.setValueAtTime(sustain, Math.max(when + attack, end - release));
+      gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(masterGain);
+      scheduledVoices.push({ osc, gain });
+      osc.onended = () => {
+        scheduledVoices = scheduledVoices.filter((v) => v.osc !== osc);
+      };
+      osc.start(when);
+      osc.stop(end + 0.02);
+    }
+
+    function startLiveTone(freq) {
+      stopLiveTone();
+      const ctx = ensureAudio();
+      if (masterGain) masterGain.gain.setValueAtTime(1, ctx.currentTime);
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const filter = ctx.createBiquadFilter();
+      osc.type = "sawtooth";
+      osc.frequency.value = freq;
+      filter.type = "lowpass";
+      filter.frequency.value = 1400;
+      gain.gain.value = 0.0001;
+      osc.connect(filter);
+      filter.connect(gain);
+      gain.connect(masterGain);
+      const now = ctx.currentTime;
+      gain.gain.exponentialRampToValueAtTime(0.2, now + 0.015);
+      osc.start(now);
+      liveVoice = { osc, gain };
+    }
+
+    function stopLiveTone() {
+      if (!liveVoice) return;
+      const { osc, gain } = liveVoice;
+      const ctx = audioCtx;
+      const now = ctx && ctx.state !== "closed" ? ctx.currentTime : 0;
+      try {
+        gain.gain.cancelScheduledValues(now);
+        gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0001), now);
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.04);
+        osc.stop(now + 0.06);
+      } catch (_) { /* already stopped */ }
+      liveVoice = null;
+    }
+
+    function clearKeys() {
+      document.querySelectorAll(".key").forEach((el) => el.classList.remove("on"));
+    }
+
+    function lightKey(pitch, mod) {
+      clearKeys();
+      const note = document.querySelector(`.key[data-pitch="${CSS.escape(pitch)}"]`);
+      if (note) note.classList.add("on");
+      const m = document.querySelector(`.key.mod[data-mod="${mod}"]`);
+      if (m) m.classList.add("on");
+    }
+
+    const statusEl = document.getElementById("status");
+    const nowEl = document.getElementById("nowPlaying");
+    const scoreEl = document.getElementById("score");
+    const progressEl = document.getElementById("progress");
+    const timeCurEl = document.getElementById("timeCur");
+    const timeTotalEl = document.getElementById("timeTotal");
+
+    let currentScorePath = "scores/tonghua.txt";
+    let savedScoreText = "";
+    let scoreDirty = false;
+    let currentMod = "natural";
+    let lastDuration = 0;
+    let progressDragging = false;
+    let playing = false;
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status" + (kind ? " " + kind : "");
+    }
+
+    function rememberScorePath(path) {
+      if (!path || !path.startsWith("scores/") || !path.endsWith(".txt")) return;
+      try {
+        localStorage.setItem("dharm.lastScore", path);
+      } catch (_) { /* ignore */ }
+    }
+
+    function lastScorePath() {
+      try {
+        return localStorage.getItem("dharm.lastScore") || "";
+      } catch (_) {
+        return "";
+      }
+    }
+
+    function updateScorePathUi() {
+      const el = document.getElementById("scorePathLabel");
+      if (el) el.textContent = currentScorePath || "（未绑定文件）";
+      const dirty = document.getElementById("dirtyLabel");
+      if (dirty) dirty.textContent = scoreDirty ? "● 未保存" : "";
+    }
+
+    function setCurrentScorePath(path) {
+      currentScorePath = path || null;
+      if (currentScorePath) rememberScorePath(currentScorePath);
+      updateScorePathUi();
+    }
+
+    function markScoreClean(text) {
+      savedScoreText = text;
+      scoreDirty = false;
+      updateScorePathUi();
+    }
+
+    function markScoreDirty() {
+      scoreDirty = scoreEl.value !== savedScoreText;
+      updateScorePathUi();
+    }
+
+    async function saveCurrentScore() {
+      if (!currentScorePath) {
+        const name = prompt("未绑定文件。保存到 scores/ 下的文件名？", "draft.txt");
+        if (!name) return;
+        let path = name.startsWith("scores/") ? name : `scores/${name.replace(/^.*\//, "")}`;
+        if (!path.endsWith(".txt")) path += ".txt";
+        setCurrentScorePath(path);
+      }
+      try {
+        await saveScoreToDisk(currentScorePath, scoreEl.value);
+        const id = currentScorePath.replace(/^scores\//, "").replace(/\.txt$/, "");
+        PRESETS[id] = scoreEl.value;
+        markScoreClean(scoreEl.value);
+        const sel = document.getElementById("preset");
+        if (sel && ![...sel.options].some((o) => o.value === id)) {
+          const opt = document.createElement("option");
+          opt.value = id;
+          opt.textContent = id;
+          sel.appendChild(opt);
+        }
+        if (sel) sel.value = id;
+        rememberScorePath(currentScorePath);
+        setStatus("已保存 " + currentScorePath, "ok");
+      } catch (err) {
+        setStatus("保存失败: " + err.message, "err");
+      }
+    }
+
+    const codeEditorEl = document.getElementById("codeEditor");
+    const codeGutterEl = document.getElementById("codeGutter");
+    const codeLineHlEl = document.getElementById("codeLineHl");
+    const codePlayHlEl = document.getElementById("codePlayHl");
+    const codeWrapProbeEl = document.getElementById("codeWrapProbe");
+    const chkWrapEl = document.getElementById("chkWrap");
+    let editorCaretLine = 1;
+    let editorPlayLine = 0;
+    let editorWrap = localStorage.getItem("dharm.wrap") === "1";
+    /** @type {number[]} logical line pixel heights */
+    let editorLineHeights = [];
+    let gutterFp = "";
+
+    function editorMetrics() {
+      const cs = getComputedStyle(scoreEl);
+      return {
+        lh: parseFloat(cs.lineHeight) || 22,
+        padTop: parseFloat(cs.paddingTop) || 12,
+        padLeft: parseFloat(cs.paddingLeft) || 14,
+        padRight: parseFloat(cs.paddingRight) || 14,
+      };
+    }
+
+    function caretLineFromPos(pos) {
+      const text = scoreEl.value;
+      let line = 1;
+      for (let i = 0; i < pos && i < text.length; i++) {
+        if (text.charCodeAt(i) === 10) line++;
+      }
+      return line;
+    }
+
+    function measureEditorLineHeights() {
+      const lines = scoreEl.value.split("\n");
+      const { lh, padLeft, padRight } = editorMetrics();
+      if (!editorWrap || !codeWrapProbeEl) {
+        editorLineHeights = lines.map(() => lh);
+        return;
+      }
+      const contentW = Math.max(40, scoreEl.clientWidth - padLeft - padRight);
+      codeWrapProbeEl.style.width = contentW + "px";
+      codeWrapProbeEl.style.fontSize = getComputedStyle(scoreEl).fontSize;
+      codeWrapProbeEl.style.lineHeight = getComputedStyle(scoreEl).lineHeight;
+      editorLineHeights = lines.map((line) => {
+        codeWrapProbeEl.textContent = line.length ? line : " ";
+        return Math.max(lh, codeWrapProbeEl.offsetHeight);
+      });
+    }
+
+    function lineOffsetY(line1based) {
+      const { lh } = editorMetrics();
+      let y = 0;
+      for (let i = 0; i < line1based - 1; i++) y += editorLineHeights[i] || lh;
+      return y;
+    }
+
+    function placeEditorHl(el, line) {
+      if (!el) return;
+      if (!line || line < 1) {
+        el.classList.remove("on");
+        return;
+      }
+      const { lh, padTop } = editorMetrics();
+      const h = editorLineHeights[line - 1] || lh;
+      const y = padTop + lineOffsetY(line) - scoreEl.scrollTop;
+      el.style.top = y + "px";
+      el.style.height = h + "px";
+      const visible = y + h > 0 && y < scoreEl.clientHeight;
+      el.classList.toggle("on", visible);
+    }
+
+    function syncEditorGutter() {
+      if (!codeGutterEl) return;
+      const n = scoreEl.value.split("\n").length;
+      const { lh } = editorMetrics();
+      const fp = n + "|" + editorWrap + "|" + editorPlayLine + "|" + editorLineHeights.join(",");
+      if (fp !== gutterFp) {
+        gutterFp = fp;
+        let html = "";
+        for (let i = 1; i <= n; i++) {
+          const h = editorLineHeights[i - 1] || lh;
+          const cls = ["ln"];
+          if (i === editorCaretLine) cls.push("cur");
+          if (i === editorPlayLine) cls.push("play");
+          html += `<span class="${cls.join(" ")}" style="height:${h}px;line-height:${lh}px">${i}</span>`;
+        }
+        codeGutterEl.innerHTML = html;
+      } else {
+        codeGutterEl.querySelectorAll(".ln").forEach((el, i) => {
+          el.classList.toggle("cur", i + 1 === editorCaretLine);
+          el.classList.toggle("play", i + 1 === editorPlayLine);
+        });
+      }
+      codeGutterEl.scrollTop = scoreEl.scrollTop;
+    }
+
+    function syncEditorCaretLine() {
+      const pos = scoreEl.selectionStart || 0;
+      editorCaretLine = caretLineFromPos(pos);
+      placeEditorHl(codeLineHlEl, editorCaretLine);
+      placeEditorHl(codePlayHlEl, editorPlayLine);
+      syncEditorGutter();
+    }
+
+    function setEditorPlayLine(line, { follow = true } = {}) {
+      editorPlayLine = line > 0 ? line : 0;
+      placeEditorHl(codePlayHlEl, editorPlayLine);
+      syncEditorGutter();
+      if (follow && editorPlayLine > 0 && document.activeElement !== scoreEl) {
+        scrollEditorToLine(editorPlayLine, { select: false });
+      } else if (follow && editorPlayLine > 0) {
+        // 编辑中只保证播放行大致可见，不抢光标
+        const { padTop } = editorMetrics();
+        const y = padTop + lineOffsetY(editorPlayLine);
+        const h = editorLineHeights[editorPlayLine - 1] || editorMetrics().lh;
+        const top = scoreEl.scrollTop;
+        const bottom = top + scoreEl.clientHeight;
+        if (y < top + 8 || y + h > bottom - 8) {
+          scoreEl.scrollTop = Math.max(0, y - scoreEl.clientHeight / 3);
+          placeEditorHl(codePlayHlEl, editorPlayLine);
+          if (codeGutterEl) codeGutterEl.scrollTop = scoreEl.scrollTop;
+        }
+      }
+    }
+
+    function refreshEditorChrome() {
+      gutterFp = "";
+      measureEditorLineHeights();
+      syncEditorCaretLine();
+    }
+
+    function applyEditorWrap(on) {
+      editorWrap = !!on;
+      if (codeEditorEl) codeEditorEl.classList.toggle("wrap", editorWrap);
+      if (chkWrapEl) chkWrapEl.checked = editorWrap;
+      localStorage.setItem("dharm.wrap", editorWrap ? "1" : "0");
+      refreshEditorChrome();
+    }
+
+    function scrollEditorToLine(line, { select = true } = {}) {
+      if (!line || line < 1) return;
+      const text = scoreEl.value;
+      const lines = text.split(/\n/);
+      let start = 0;
+      for (let i = 0; i < line - 1 && i < lines.length; i++) start += lines[i].length + 1;
+      const end = start + (lines[line - 1] || "").length;
+      const editingHere = document.activeElement === scoreEl;
+      if (select && !editingHere) {
+        scoreEl.focus({ preventScroll: true });
+        scoreEl.setSelectionRange(start, end);
+      }
+      if (!editorLineHeights.length) measureEditorLineHeights();
+      const { padTop } = editorMetrics();
+      const target = padTop + lineOffsetY(line) - scoreEl.clientHeight / 3;
+      scoreEl.scrollTop = Math.max(0, target);
+      editorCaretLine = line;
+      syncEditorCaretLine();
+    }
+
+    function initScoreWorkspaceResize() {
+      const ws = document.getElementById("scoreWorkspace");
+      const splitV = document.getElementById("scoreSplitV");
+      const splitH = document.getElementById("scoreSplitH");
+      const mainEl = document.querySelector("main");
+      const mainHandle = document.getElementById("mainWidthHandle");
+      if (!ws || !splitV || !splitH) return;
+
+      const splitW = 10;
+      const savedH = Number(localStorage.getItem("dharm.scoreH") || 0);
+      const savedRatio = Number(localStorage.getItem("dharm.scoreRatio") || 0.5);
+      const savedMain = Number(localStorage.getItem("dharm.mainMax") || 0);
+      if (savedH >= 280) ws.style.height = savedH + "px";
+      if (savedMain >= 720 && mainEl) {
+        mainEl.style.setProperty("--main-max", savedMain + "px");
+      }
+      const clampRatio = (r) => Math.max(0.18, Math.min(0.82, r));
+      let ratio = clampRatio(savedRatio || 0.5);
+      function applyRatio() {
+        ws.style.gridTemplateColumns = `${ratio}fr ${splitW}px ${1 - ratio}fr`;
+      }
+      applyRatio();
+
+      function drag(el, onMove) {
+        el.addEventListener("mousedown", (e) => {
+          e.preventDefault();
+          el.classList.add("dragging");
+          const move = (ev) => onMove(ev);
+          const up = () => {
+            el.classList.remove("dragging");
+            document.removeEventListener("mousemove", move);
+            document.removeEventListener("mouseup", up);
+            document.body.style.cursor = "";
+            document.body.style.userSelect = "";
+            if (editorWrap) refreshEditorChrome();
+          };
+          document.body.style.cursor = getComputedStyle(el).cursor;
+          document.body.style.userSelect = "none";
+          document.addEventListener("mousemove", move);
+          document.addEventListener("mouseup", up);
+        });
+      }
+
+      drag(splitV, (ev) => {
+        const rect = ws.getBoundingClientRect();
+        const usable = Math.max(1, rect.width - splitW);
+        ratio = clampRatio((ev.clientX - rect.left) / usable);
+        applyRatio();
+        localStorage.setItem("dharm.scoreRatio", String(ratio));
+      });
+
+      drag(splitH, (ev) => {
+        const top = ws.getBoundingClientRect().top;
+        const h = Math.max(280, Math.min(window.innerHeight - 80, ev.clientY - top));
+        ws.style.height = h + "px";
+        localStorage.setItem("dharm.scoreH", String(Math.round(h)));
+      });
+
+      if (mainHandle && mainEl) {
+        drag(mainHandle, (ev) => {
+          const left = mainEl.getBoundingClientRect().left;
+          const maxW = Math.max(720, Math.min(window.innerWidth - 24, ev.clientX - left));
+          mainEl.style.setProperty("--main-max", maxW + "px");
+          localStorage.setItem("dharm.mainMax", String(Math.round(maxW)));
+        });
+      }
+
+      window.addEventListener("resize", () => {
+        if (editorWrap) {
+          clearTimeout(window.__dharmWrapR);
+          window.__dharmWrapR = setTimeout(() => refreshEditorChrome(), 120);
+        }
+      });
+    }
+
+    function clampSpeed(v) {
+      return Math.round(Math.max(0.5, Math.min(2.5, v)) * 100) / 100;
+    }
+
+    function formatTime(sec) {
+      sec = Math.max(0, sec || 0);
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return m + ":" + String(s).padStart(2, "0");
+    }
+
+    function setProgressUi(curSec, totalSec) {
+      lastDuration = totalSec || lastDuration;
+      const total = Math.max(lastDuration, 0.001);
+      const cur = Math.max(0, Math.min(curSec, total));
+      if (!progressDragging) {
+        progressEl.max = "1000";
+        progressEl.value = String(Math.round((cur / total) * 1000));
+      }
+      timeCurEl.textContent = formatTime(cur);
+      timeTotalEl.textContent = formatTime(total);
+    }
+
+    function liveRestScale(parsed) {
+      const ui = parseFloat(document.getElementById("restScale").value);
+      if (Number.isFinite(ui) && ui > 0) return ui;
+      return parsed?.restScale > 0 ? parsed.restScale : 1;
+    }
+
+    function syncRestScaleFromScore() {
+      try {
+        const p = parseScore(scoreEl.value);
+        document.getElementById("restScale").value = String(p.restScale || 1);
+      } catch (_) { /* ignore */ }
+    }
+
+    function applyRestScaleToText(text, scale) {
+      const n = Math.round(scale * 100) / 100;
+      if (/^rest_scale\s*:/im.test(text)) {
+        return text.replace(/^rest_scale\s*:\s*.+$/im, `rest_scale: ${n}`);
+      }
+      if (/^register\s*:/im.test(text)) {
+        return text.replace(/^(register\s*:.+)$/im, `$1\nrest_scale: ${n}`);
+      }
+      if (/^bpm\s*:/im.test(text)) {
+        return text.replace(/^(bpm\s*:.+)$/im, `$1\nrest_scale: ${n}`);
+      }
+      return `rest_scale: ${n}\n` + text;
+    }
+
+    function buildSchedule(parsed, speed) {
+      let cursor = 0;
+      let reg = parsed.register;
+      const items = [];
+      let lyricIndex = -1;
+      let scoreIndex = -1;
+      for (const ev of parsed.events) {
+        if (ev.type === "register") {
+          reg = ev.register;
+          items.push({ at: cursor, kind: "reg", reg, dur: 0, line: ev.line || 0 });
+        } else if (ev.type === "lyric") {
+          lyricIndex += 1;
+          items.push({ at: cursor, kind: "lyric", text: ev.text, lyricIndex, dur: 0, line: ev.line || 0 });
+        } else if (ev.type === "rest") {
+          scoreIndex += 1;
+          const scale = liveRestScale(parsed);
+          const ms = Math.max(1, Math.round((ev.ms / speed) * scale));
+          items.push({
+            at: cursor,
+            kind: "rest",
+            ms,
+            dur: ms / 1000,
+            lyricIndex,
+            scoreIndex,
+            line: ev.line || 0,
+            label: "0",
+          });
+          cursor += ms / 1000;
+        } else if (ev.type === "note") {
+          scoreIndex += 1;
+          const ms = ev.ms / speed;
+          const octaves = ev.octaves || 0;
+          const midi = noteToMidi(ev.pitch, ev.mod, octaves);
+          const phone = phonePitch(ev.pitch, ev.mod, octaves);
+          const acc = accLabel(ev.mod, octaves);
+          items.push({
+            at: cursor,
+            kind: "note",
+            pitch: phone.pitch,
+            mod: phone.mod,
+            scorePitch: ev.pitch,
+            octaves,
+            ms,
+            midi,
+            reg,
+            dur: ms / 1000,
+            lyricIndex,
+            scoreIndex,
+            line: ev.line || 0,
+            label: acc + ev.pitch,
+          });
+          cursor += ms / 1000;
+        }
+      }
+      return {
+        items,
+        duration: cursor,
+        initialReg: parsed.register,
+        lyrics: parsed.lyrics || [],
+        sourceLines: parsed.sourceLines || [],
+      };
+    }
+
+    function scrollPanelToEl(panel, el) {
+      if (!panel || !el) return;
+      // Use viewport delta — offsetTop is unreliable when offsetParent ≠ panel
+      const pRect = panel.getBoundingClientRect();
+      const eRect = el.getBoundingClientRect();
+      const delta = eRect.top - pRect.top;
+      const target =
+        panel.scrollTop + delta - panel.clientHeight / 2 + el.getBoundingClientRect().height / 2;
+      const max = Math.max(0, panel.scrollHeight - panel.clientHeight);
+      panel.scrollTop = Math.max(0, Math.min(target, max));
+    }
+
+    let scorePanelFingerprint = "";
+
+    function renderScoreEvents(sourceLines, activeLine) {
+      const panel = document.getElementById("scorePanel");
+      if (!panel) return;
+      const lines = sourceLines && sourceLines.length ? sourceLines : [""];
+      const fp = lines.join("\n");
+      // Only rebuild DOM when text changes — rebuilding resets scroll to bottom
+      if (fp !== scorePanelFingerprint) {
+        scorePanelFingerprint = fp;
+        panel.innerHTML = lines.map((text, i) => {
+          const ln = i + 1;
+          const empty = !String(text).trim();
+          const cls = ["score-line", empty ? "empty" : ""].filter(Boolean).join(" ");
+          return `<div class="${cls}" data-line="${ln}"><span class="ln">${ln}</span><span class="tx"></span></div>`;
+        }).join("");
+        panel.querySelectorAll(".score-line").forEach((el) => {
+          const ln = Number(el.dataset.line);
+          const raw = lines[ln - 1] ?? "";
+          el.querySelector(".tx").textContent = raw.length ? raw : " ";
+          el.addEventListener("mousedown", (e) => e.preventDefault());
+          bindScoreLineClicks(el, ln);
+        });
+      }
+      highlightScoreLine(activeLine);
+    }
+
+    let scoreClickTimer = null;
+    function bindScoreLineClicks(el, ln) {
+      el.addEventListener("click", (e) => {
+        if (e.detail > 1) return;
+        clearTimeout(scoreClickTimer);
+        scoreClickTimer = setTimeout(() => playScorePhraseAtLine(ln), 280);
+      });
+      el.addEventListener("dblclick", (e) => {
+        e.preventDefault();
+        clearTimeout(scoreClickTimer);
+        playScoreFromLine(ln);
+      });
+    }
+
+    function highlightScoreLine(line) {
+      const panel = document.getElementById("scorePanel");
+      if (!panel) return;
+      if (!line) {
+        panel.querySelectorAll(".score-line").forEach((el) => el.classList.remove("active"));
+        setEditorPlayLine(0, { follow: false });
+        return;
+      }
+      let active = null;
+      panel.querySelectorAll(".score-line").forEach((el) => {
+        const on = Number(el.dataset.line) === line;
+        el.classList.toggle("active", on);
+        if (on) active = el;
+      });
+      if (active) {
+        requestAnimationFrame(() => scrollPanelToEl(panel, active));
+      }
+      setEditorPlayLine(line, { follow: true });
+    }
+
+    function renderLyrics(lyrics, activeIndex) {
+      const panel = document.getElementById("lyricsPanel");
+      if (!panel) return;
+      if (!lyrics.length) {
+        panel.innerHTML = '<div class="lyric-line muted">（可选辅助：&gt; 歌词）</div>';
+        return;
+      }
+      panel.innerHTML = lyrics.map((text, i) =>
+        `<div class="lyric-line${i === activeIndex ? " aux-active" : ""}" data-i="${i}">${text}</div>`
+      ).join("");
+      panel.querySelectorAll(".lyric-line[data-i]").forEach((el) => {
+        el.addEventListener("mousedown", (e) => e.preventDefault());
+        const idx = Number(el.dataset.i);
+        el.addEventListener("click", (e) => {
+          if (e.detail > 1) return;
+          clearTimeout(scoreClickTimer);
+          scoreClickTimer = setTimeout(() => playLyricPhrase(idx), 280);
+        });
+        el.addEventListener("dblclick", (e) => {
+          e.preventDefault();
+          clearTimeout(scoreClickTimer);
+          jumpToLyric(idx); // from here to end
+        });
+      });
+    }
+
+    function highlightLyric(index) {
+      const panel = document.getElementById("lyricsPanel");
+      if (!panel) return;
+      panel.querySelectorAll(".lyric-line").forEach((el) => {
+        el.classList.toggle("aux-active", Number(el.dataset.i) === index);
+      });
+      // do not scroll page for lyrics
+    }
+
+    let cachedItems = [];
+    let cachedSourceLines = [];
+
+    function jumpToLyric(index) {
+      refreshDuration();
+      const item = cachedItems.find((it) => it.kind === "lyric" && it.lyricIndex === index);
+      if (!item) return;
+      setProgressUi(item.at, lastDuration);
+      highlightLyric(index);
+      if (item.line) {
+        highlightScoreLine(item.line);
+        scrollEditorToLine(item.line);
+      }
+      playScore(item.at);
+    }
+
+    function phraseBoundsForLine(line) {
+      refreshDuration();
+      const items = cachedItems;
+      if (!items.length) return null;
+      const lyrics = items.filter((it) => it.kind === "lyric");
+      // owning lyric: last lyric with line <= clicked line
+      let owner = null;
+      for (const ly of lyrics) {
+        if (ly.line <= line) owner = ly;
+        else break;
+      }
+      let startAt;
+      let endAt;
+      if (owner) {
+        startAt = owner.at;
+        const next = lyrics.find((ly) => ly.at > owner.at + 1e-6);
+        endAt = next ? next.at : lastDuration;
+      } else {
+        // before any lyric: from first event on this line to first lyric / end
+        const onLine = items.find(
+          (it) => it.line === line && (it.kind === "note" || it.kind === "rest" || it.kind === "lyric")
+        );
+        if (!onLine) return null;
+        startAt = onLine.at;
+        const next = lyrics.find((ly) => ly.at > startAt + 1e-6);
+        endAt = next ? next.at : lastDuration;
+      }
+      if (endAt - startAt < 0.05) endAt = Math.min(lastDuration, startAt + 0.05);
+      return { startAt, endAt };
+    }
+
+    function playScorePhraseAtLine(line) {
+      const bounds = phraseBoundsForLine(line);
+      scrollEditorToLine(line);
+      highlightScoreLine(line);
+      if (!bounds) return;
+      setProgressUi(bounds.startAt, lastDuration);
+      setStatus(`播放一句 · L${line}`, "ok");
+      playScore(bounds.startAt, bounds.endAt);
+    }
+
+    function playScoreFromLine(line) {
+      refreshDuration();
+      scrollEditorToLine(line);
+      const item = cachedItems.find(
+        (it) => (it.kind === "note" || it.kind === "rest" || it.kind === "lyric") && it.line === line
+      );
+      if (!item) {
+        highlightScoreLine(line);
+        return;
+      }
+      setProgressUi(item.at, lastDuration);
+      highlightScoreLine(line);
+      setStatus(`从此播放 · L${line}`, "ok");
+      playScore(item.at);
+    }
+
+    function playLyricPhrase(index) {
+      refreshDuration();
+      const item = cachedItems.find((it) => it.kind === "lyric" && it.lyricIndex === index);
+      if (!item) return;
+      const lyrics = cachedItems.filter((it) => it.kind === "lyric");
+      const next = lyrics.find((ly) => ly.at > item.at + 1e-6);
+      const endAt = next ? next.at : lastDuration;
+      setProgressUi(item.at, lastDuration);
+      highlightLyric(index);
+      if (item.line) {
+        highlightScoreLine(item.line);
+        scrollEditorToLine(item.line);
+      }
+      setStatus(`播放一句 · ${item.text}`, "ok");
+      playScore(item.at, endAt);
+    }
+
+    function jumpToScoreLine(line) {
+      playScoreFromLine(line);
+    }
+
+    function jumpToScoreIndex(index) {
+      refreshDuration();
+      const item = cachedItems.find((it) => it.scoreIndex === index);
+      if (!item) return;
+      setProgressUi(item.at, lastDuration);
+      if (item.line) highlightScoreLine(item.line);
+      playScore(item.at);
+    }
+
+    function refreshDuration() {
+      try {
+        const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+        const parsed = parseScore(scoreEl.value);
+        const built = buildSchedule(parsed, speed);
+        cachedItems = built.items;
+        cachedSourceLines = built.sourceLines || parsed.sourceLines || scoreEl.value.split(/\r?\n/);
+        const ratio = Number(progressEl.value) / Number(progressEl.max || 1000);
+        setProgressUi(ratio * built.duration, built.duration);
+        const activeLineEl = document.querySelector(".score-line.active");
+        const activeLine = activeLineEl ? Number(activeLineEl.dataset.line) : -1;
+        renderScoreEvents(cachedSourceLines, activeLine);
+        const activeLyric = document.querySelector(".lyric-line.aux-active");
+        const activeLi = activeLyric ? Number(activeLyric.dataset.i) : -1;
+        renderLyrics(built.lyrics, activeLi);
+      } catch (err) {
+        console.error(err);
+        setProgressUi(0, 0);
+        cachedSourceLines = scoreEl.value.split(/\r?\n/);
+        renderScoreEvents(cachedSourceLines, -1);
+        renderLyrics([], -1);
+      }
+    }
+
+    async function playScore(startAtSec, endAtSec) {
+      const token = ++playToken;
+      playing = true;
+      stopLiveTone();
+      silenceScheduled();
+      if (audioCtx && audioCtx.state !== "closed") {
+        try { await audioCtx.close(); } catch (_) {}
+      }
+      audioCtx = null;
+      masterGain = null;
+      let parsed;
+      try {
+        parsed = parseScore(scoreEl.value);
+      } catch (e) {
+        playing = false;
+        setStatus(String(e.message || e), "err");
+        return;
+      }
+      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      document.getElementById("speed").value = String(speed);
+      updateBpmReadout();
+
+      const { items, duration, initialReg, lyrics, sourceLines } = buildSchedule(parsed, speed);
+      cachedItems = items;
+      cachedSourceLines = sourceLines || parsed.sourceLines || scoreEl.value.split(/\r?\n/);
+      renderScoreEvents(cachedSourceLines, -1);
+      renderLyrics(lyrics, -1);
+      let startAt = typeof startAtSec === "number" ? startAtSec : 0;
+      startAt = Math.max(0, Math.min(startAt, Math.max(0, duration - 0.05)));
+      let stopAt = duration;
+      if (typeof endAtSec === "number" && endAtSec > startAt) {
+        stopAt = Math.min(duration, endAtSec);
+      }
+      setProgressUi(startAt, duration);
+
+      const phraseOnly = stopAt < duration - 0.02;
+      if (!phraseOnly) {
+        setStatus(
+          `播放「${parsed.title}」 谱面 ${parsed.bpm.toFixed(0)} · 实际 ${(parsed.bpm * speed).toFixed(0)}`,
+          "ok"
+        );
+      }
+
+      let reg = initialReg;
+      let lyricIndex = -1;
+      let activeLine = 0;
+      for (const item of items) {
+        if (item.at > startAt) break;
+        if (item.kind === "reg") reg = item.reg;
+        if (item.kind === "lyric") lyricIndex = item.lyricIndex;
+        if (item.line) activeLine = item.line;
+      }
+      highlightLyric(lyricIndex);
+      highlightScoreLine(activeLine);
+
+      const ctx = ensureAudio();
+      const audioT0 = ctx.currentTime + 0.06;
+      const wallStart = performance.now();
+
+      for (const item of items) {
+        if (item.at >= stopAt - 1e-6) break;
+        const end = Math.min(item.at + (item.dur || 0), stopAt);
+        if (end <= startAt + 1e-6) continue;
+        const playFrom = Math.max(item.at, startAt);
+        const remain = end - playFrom;
+        const when = audioT0 + (playFrom - startAt);
+        if (item.kind === "note" && remain > 0.02) {
+          holdTone(midiFreq(item.midi), remain, when);
+        }
+      }
+
+      function tick() {
+        if (token !== playToken) return;
+        const elapsed = startAt + (performance.now() - wallStart) / 1000;
+        setProgressUi(Math.min(elapsed, stopAt), duration);
+        if (elapsed < stopAt) {
+          requestAnimationFrame(tick);
+        }
+      }
+      requestAnimationFrame(tick);
+
+      for (const item of items) {
+        if (token !== playToken) {
+          playing = false;
+          return;
+        }
+        if (item.at >= stopAt - 1e-6) break;
+        const end = item.at + (item.dur || 0);
+        if (end <= startAt + 1e-6) continue;
+        const playFrom = Math.max(item.at, startAt);
+        if (playFrom >= stopAt - 1e-6) break;
+        const wait = (audioT0 + (playFrom - startAt) - ctx.currentTime) * 1000;
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (token !== playToken) {
+          playing = false;
+          return;
+        }
+        if (item.kind === "reg") {
+          nowEl.textContent = "@" + item.reg;
+        } else if (item.kind === "lyric") {
+          highlightLyric(item.lyricIndex);
+          if (item.line) highlightScoreLine(item.line);
+          nowEl.textContent = "L" + item.line + " ▶ " + item.text;
+        } else if (item.kind === "rest") {
+          if (item.line) highlightScoreLine(item.line);
+          if (typeof item.lyricIndex === "number" && item.lyricIndex >= 0) {
+            highlightLyric(item.lyricIndex);
+          }
+          clearKeys();
+          nowEl.textContent = "L" + item.line + " 休止 " + Math.round(item.ms) + "ms";
+        } else {
+          if (item.line) highlightScoreLine(item.line);
+          if (typeof item.lyricIndex === "number" && item.lyricIndex >= 0) {
+            highlightLyric(item.lyricIndex);
+          }
+          lightKey(item.pitch, item.mod);
+          nowEl.textContent = `L${item.line}  ${item.label}  ·  ${Math.round(item.ms)}ms`;
+        }
+      }
+      if (token === playToken) {
+        clearKeys();
+        nowEl.textContent = phraseOnly ? "一句结束" : "结束";
+        setProgressUi(stopAt, duration);
+        setStatus(phraseOnly ? "一句播放结束" : "播放结束", "ok");
+        playing = false;
+      }
+    }
+
+    function seekFromProgress() {
+      if (!lastDuration) refreshDuration();
+      const total = lastDuration || 0;
+      const ratio = Number(progressEl.value) / Number(progressEl.max || 1000);
+      const t = ratio * total;
+      setProgressUi(t, total);
+      return t;
+    }
+
+    function readScoreBpm() {
+      try {
+        return parseScore(scoreEl.value).bpm;
+      } catch (_) {
+        return null;
+      }
+    }
+
+    function updateBpmReadout() {
+      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      document.getElementById("speed").value = String(speed);
+      const base = readScoreBpm();
+      const el = document.getElementById("bpmReadout");
+      if (base == null) {
+        el.textContent = "谱面 BPM ? · 实际 ?";
+        return;
+      }
+      el.textContent = `谱面 BPM ${base.toFixed(0)} · 实际 ${(base * speed).toFixed(0)}（×${speed}）`;
+    }
+
+    function bumpSpeed(delta) {
+      const input = document.getElementById("speed");
+      input.value = String(clampSpeed((parseFloat(input.value) || 1) + delta));
+      updateBpmReadout();
+      refreshDuration();
+    }
+
+    function applyBpmToText(text, newBpm) {
+      const n = Math.round(newBpm * 100) / 100;
+      if (/^bpm\s*:/im.test(text)) {
+        return text.replace(/^bpm\s*:\s*.+$/im, `bpm: ${n}`);
+      }
+      // insert after title or at top meta block
+      if (/^title\s*:/im.test(text)) {
+        return text.replace(/^(title\s*:.+)$/im, `$1\nbpm: ${n}`);
+      }
+      return `bpm: ${n}\n` + text;
+    }
+
+    async function saveScoreToDisk(path, content) {
+      const res = await fetch("/api/save-score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path, content }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return data.path;
+    }
+
+    function doPlay() {
+      const t = seekFromProgress();
+      const start = lastDuration && t >= lastDuration - 0.15 ? 0 : t;
+      playScore(start);
+    }
+
+    function doStop() {
+      playToken++;
+      playing = false;
+      stopLiveTone();
+      silenceScheduled();
+      clearKeys();
+      nowEl.textContent = "已停止";
+      setStatus("已停止");
+      // hard-cut: close graph so nothing can keep ringing
+      const ctx = audioCtx;
+      audioCtx = null;
+      masterGain = null;
+      if (ctx && ctx.state !== "closed") {
+        try { ctx.close(); } catch (_) {}
+      }
+    }
+
+    function togglePlayPause() {
+      if (playing) doStop();
+      else doPlay();
+    }
+
+    document.getElementById("btnPlay").addEventListener("click", doPlay);
+    document.getElementById("btnStop").addEventListener("click", doStop);
+
+    progressEl.addEventListener("pointerdown", () => { progressDragging = true; });
+    progressEl.addEventListener("pointerup", () => {
+      progressDragging = false;
+      const t = seekFromProgress();
+      if (playing) playScore(t);
+    });
+    progressEl.addEventListener("input", () => {
+      if (!lastDuration) refreshDuration();
+      const total = lastDuration || 0;
+      const t = (Number(progressEl.value) / Number(progressEl.max || 1000)) * total;
+      timeCurEl.textContent = formatTime(t);
+    });
+    progressEl.addEventListener("change", () => {
+      progressDragging = false;
+      const t = seekFromProgress();
+      if (playing) playScore(t);
+    });
+
+    document.getElementById("btnSlower").addEventListener("click", () => bumpSpeed(-0.05));
+    document.getElementById("btnFaster").addEventListener("click", () => bumpSpeed(0.05));
+    document.getElementById("speed").addEventListener("change", () => {
+      updateBpmReadout();
+      refreshDuration();
+    });
+    document.getElementById("speed").addEventListener("input", () => {
+      updateBpmReadout();
+      refreshDuration();
+    });
+    let scoreInputTimer = null;
+    let scoreComposing = false;
+    scoreEl.addEventListener("compositionstart", () => { scoreComposing = true; });
+    scoreEl.addEventListener("compositionend", () => {
+      scoreComposing = false;
+      markScoreDirty();
+      updateBpmReadout();
+      refreshDuration();
+    });
+    scoreEl.addEventListener("input", () => {
+      markScoreDirty();
+      measureEditorLineHeights();
+      syncEditorCaretLine();
+      if (scoreComposing) return; // 中文输入法组字期间别重绘，否则光标乱跳
+      updateBpmReadout();
+      // 防抖：每次按键整谱重解析+重建左侧会打乱 textarea 光标
+      clearTimeout(scoreInputTimer);
+      scoreInputTimer = setTimeout(() => refreshDuration(), 180);
+    });
+    scoreEl.addEventListener("scroll", () => {
+      if (codeGutterEl) codeGutterEl.scrollTop = scoreEl.scrollTop;
+      syncEditorCaretLine();
+    });
+    ["keyup", "click", "select", "focus"].forEach((ev) => {
+      scoreEl.addEventListener(ev, () => syncEditorCaretLine());
+    });
+    if (chkWrapEl) {
+      chkWrapEl.addEventListener("change", () => applyEditorWrap(chkWrapEl.checked));
+    }
+    initScoreWorkspaceResize();
+    applyEditorWrap(editorWrap);
+
+    document.getElementById("btnSaveScore").addEventListener("click", () => {
+      saveCurrentScore();
+    });
+
+    // Mouse wheel tempo: ONLY on the tempo row (not progress / score / harmonica)
+    function onWheelTempo(e) {
+      e.preventDefault();
+      bumpSpeed(e.deltaY > 0 ? -0.05 : 0.05);
+    }
+    document.getElementById("tempoRow").addEventListener("wheel", onWheelTempo, { passive: false });
+    // Progress area must never steal into tempo
+    document.querySelector(".progress-wrap").addEventListener("wheel", (e) => {
+      e.stopPropagation();
+    }, { passive: true });
+
+    document.getElementById("btnSaveBpm").addEventListener("click", async () => {
+      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      const base = readScoreBpm();
+      if (base == null) {
+        setStatus("乐谱解析失败，无法写 BPM", "err");
+        return;
+      }
+      const effective = Math.round(base * speed * 100) / 100;
+      if (speed === 1) {
+        setStatus("当前是 ×1，与谱面 BPM 相同，无需写入", "ok");
+        return;
+      }
+      const ok = confirm(
+        `把谱面 BPM 从 ${base.toFixed(0)} 改成实际速度 ${effective}（当前 ×${speed}）？\n` +
+        `将写入编辑框` + (currentScorePath ? `，并尝试保存 ${currentScorePath}` : "") + "。"
+      );
+      if (!ok) {
+        setStatus("已取消写入", "");
+        return;
+      }
+      scoreEl.value = applyBpmToText(scoreEl.value, effective);
+      refreshEditorChrome();
+      document.getElementById("speed").value = "1";
+      updateBpmReadout();
+      if (!currentScorePath) {
+        setStatus(`已更新编辑框 BPM=${effective}（未绑定文件，请另存为）`, "ok");
+        return;
+      }
+      try {
+        await saveScoreToDisk(currentScorePath, scoreEl.value);
+        PRESETS[currentScorePath.replace(/^scores\//, "").replace(/\.txt$/, "") || "tonghua"] = scoreEl.value;
+        setStatus(`已保存 ${currentScorePath}（bpm: ${effective}），速度重置为 ×1`, "ok");
+      } catch (err) {
+        setStatus(`编辑框已更新 BPM=${effective}，写盘失败: ${err.message}（可用 ./dharm preview）`, "err");
+      }
+    });
+
+    let recording = false;
+    /** @type {{ lyric: string, tokens: string[], register: number }[]} */
+    let recPhrases = [];
+    /** @type {{ lyric: string, tokens: string[], register: number }} */
+    let recCurrent = { lyric: "", tokens: [], register: 2 };
+    /** Press-order stack; index 0 = currently sounding (先按下的优先). */
+    let holdStack = [];
+    const heldKeys = new Set();
+    let lockedMod = "natural"; // click-lock baseline
+    let holdModStack = []; // letter-key temporary mods
+    let lastNoteEndAt = null; // for auto gap rests
+
+    function soundingHold() {
+      return holdStack[0] || null;
+    }
+
+    function paintSoundingKey() {
+      clearKeys();
+      paintModUi();
+      const cur = soundingHold();
+      if (cur) lightKey(cur.pitch, cur.mod);
+    }
+
+    function effectiveMod() {
+      return holdModStack.length ? holdModStack[holdModStack.length - 1] : lockedMod;
+    }
+
+    function paintModUi() {
+      const mod = effectiveMod();
+      currentMod = mod;
+      document.querySelectorAll(".key.mod").forEach((m) => m.classList.toggle("on", m.dataset.mod === mod));
+    }
+
+    function setLockedMod(mod) {
+      lockedMod = mod;
+      paintModUi();
+    }
+
+    function pushHoldMod(mod) {
+      holdModStack.push(mod);
+      paintModUi();
+    }
+
+    function popHoldMod(mod) {
+      // remove last matching
+      for (let i = holdModStack.length - 1; i >= 0; i--) {
+        if (holdModStack[i] === mod) {
+          holdModStack.splice(i, 1);
+          break;
+        }
+      }
+      paintModUi();
+    }
+
+
+    function pitchToken(pitch, mod, durName) {
+      const prefix = mod === "sharp" ? "#" : mod === "flat" ? "b" : mod === "semitone" ? "s" : "";
+      return prefix + pitch + "/" + durName;
+    }
+
+    function quantizeNoteDur(ms) {
+      const bpm = Math.max(40, parseFloat(document.getElementById("recBpm").value) || 78);
+      const msBeat = 60000 / bpm;
+      const beats = Math.max(0.2, ms / msBeat);
+      const cands = [
+        ["16", 0.25], ["8", 0.5], ["8.", 0.75], ["4", 1], ["4.", 1.5], ["2", 2], ["2.", 3], ["1", 4],
+      ];
+      let bestDur = "8";
+      let bestDiff = Infinity;
+      for (const [name, b] of cands) {
+        const d = Math.abs(b - beats);
+        if (d < bestDiff) {
+          bestDiff = d;
+          bestDur = name;
+        }
+      }
+      return bestDur;
+    }
+
+    function maybeRecordGap(now) {
+      if (!recording || lastNoteEndAt == null) return;
+      const gap = Math.round(now - lastNoteEndAt);
+      // ignore tiny finger gaps; anything meaningful becomes exact rest
+      if (gap >= 50) {
+        recCurrent.tokens.push("0:" + gap);
+      }
+    }
+
+    function refreshRecDraft() {
+      const bpm = Math.max(40, parseFloat(document.getElementById("recBpm").value) || 78);
+      const rs = liveRestScale();
+      const lines = [
+        "# 键盘录制草稿（休止为 0:毫秒 = 实际停顿）",
+        "title: 录制未命名",
+        "bpm: " + bpm,
+        "rest_scale: " + rs,
+        "",
+      ];
+      const all = [...recPhrases];
+      if (recCurrent.tokens.length || recCurrent.lyric) all.push(recCurrent);
+      for (const ph of all) {
+        if (!ph.tokens.length && !ph.lyric) continue;
+        lines.push("> " + (ph.lyric || "（未命名句）"));
+        lines.push(ph.tokens.join(" "));
+        lines.push("");
+      }
+      document.getElementById("recDraft").value = lines.join("\n");
+    }
+
+    function updateRecUi() {
+      const panel = document.getElementById("recordPanel");
+      const dot = document.getElementById("recDot");
+      const st = document.getElementById("recStatus");
+      panel.classList.toggle("rec-on", recording);
+      dot.classList.toggle("on", recording);
+      document.getElementById("btnRec").textContent = recording ? "■ 停止录制" : "● 录制";
+      const n = recCurrent.tokens.filter((t) => !t.startsWith("@") && !t.startsWith("0:")).length;
+      st.textContent = recording
+        ? `录制中 · 本句 ${n} 音 · 已完成 ${recPhrases.length} 句`
+        : recPhrases.length || recCurrent.tokens.length
+          ? `已暂停 · 共 ${recPhrases.length} 句 + 当前句`
+          : "未开始";
+      refreshRecDraft();
+    }
+
+    function startRecording() {
+      recording = true;
+      lastNoteEndAt = null;
+      if (!recCurrent.tokens.length && !recPhrases.length) {
+        recCurrent = { lyric: "", tokens: [], register: 2 };
+      }
+      playToken++;
+      playing = false;
+      updateRecUi();
+      setStatus("录制中：数字键弹琴；Q半音 W降八度 E升八度；两音间隔=休止", "ok");
+    }
+
+    function stopRecording() {
+      releasePerformance();
+      recording = false;
+      lastNoteEndAt = null;
+      updateRecUi();
+      setStatus("录制已暂停", "ok");
+    }
+
+    function toggleRecording() {
+      if (recording) stopRecording();
+      else startRecording();
+    }
+
+    function endPhrase() {
+      releasePerformance();
+      if (!recCurrent.tokens.filter((t) => !t.startsWith("@") && !t.startsWith("0:")).length) {
+        setStatus("本句还没有音", "err");
+        return;
+      }
+      const lyric = prompt("这一句的歌词？（可留空）", recCurrent.lyric || "");
+      if (lyric === null) return;
+      recCurrent.lyric = lyric.trim() || "（未命名句）";
+      recPhrases.push({ ...recCurrent, tokens: [...recCurrent.tokens] });
+      recCurrent = { lyric: "", tokens: [], register: 2 };
+      lastNoteEndAt = null;
+      updateRecUi();
+      setStatus("已保存一句，继续弹下一句", "ok");
+    }
+
+    function undoToken() {
+      if (holdStack.length) return;
+      while (recCurrent.tokens.length) {
+        const t = recCurrent.tokens.pop();
+        if (!t.startsWith("@")) break;
+      }
+      lastNoteEndAt = null;
+      updateRecUi();
+    }
+
+    function clearRecording() {
+      if (!confirm("清空全部录制内容？")) return;
+      releasePerformance();
+      recPhrases = [];
+      recCurrent = { lyric: "", tokens: [], register: 2 };
+      lastNoteEndAt = null;
+      updateRecUi();
+      setStatus("录制已清空", "ok");
+    }
+
+    async function commitRecording() {
+      releasePerformance();
+      if (recCurrent.tokens.filter((t) => !t.startsWith("@") && !t.startsWith("0:")).length) {
+        if (!recCurrent.lyric) {
+          const lyric = prompt("当前句尚未命名，填歌词？", "");
+          if (lyric === null) return;
+          recCurrent.lyric = (lyric || "").trim() || "（未命名句）";
+        }
+        recPhrases.push({ ...recCurrent, tokens: [...recCurrent.tokens] });
+        recCurrent = { lyric: "", tokens: [], register: 2 };
+      }
+      if (!recPhrases.length) {
+        setStatus("没有可写入的录制内容", "err");
+        return;
+      }
+      refreshRecDraft();
+      const draft = document.getElementById("recDraft").value;
+      const mode = confirm("确定：用录制内容替换下方乐谱编辑框？\n取消 = 追加到编辑框末尾")
+        ? "replace"
+        : "append";
+      if (mode === "replace") scoreEl.value = draft;
+      else scoreEl.value = scoreEl.value.trimEnd() + "\n\n" + draft + "\n";
+      refreshEditorChrome();
+      syncRestScaleFromScore();
+      updateBpmReadout();
+      refreshDuration();
+      const save = currentScorePath && confirm(`是否同时保存到 ${currentScorePath}？`);
+      if (save) {
+        try {
+          await saveScoreToDisk(currentScorePath, scoreEl.value);
+          setStatus("已写入编辑框并保存 " + currentScorePath, "ok");
+        } catch (err) {
+          setStatus("已写入编辑框；存盘失败: " + err.message, "err");
+        }
+      } else {
+        setStatus("已写入乐谱编辑框", "ok");
+      }
+      updateRecUi();
+    }
+
+    /**
+     * Multi-key: first pressed keeps sounding until released;
+     * then the oldest still-held key takes over.
+     * @param {string} pitch
+     * @param {string} fromKey unique id (keyboard code or pointer:pitch)
+     */
+    function beginPerformance(pitch, fromKey) {
+      if (holdStack.some((h) => h.fromKey === fromKey)) return;
+      playToken++;
+      playing = false;
+      silenceScheduled();
+      const now = performance.now();
+      const becomesSounding = holdStack.length === 0;
+      if (recording && becomesSounding) maybeRecordGap(now);
+      const mod = effectiveMod();
+      const entry = { pitch, mod, reg: 2, t0: now, fromKey, sounded: becomesSounding };
+      holdStack.push(entry);
+      if (becomesSounding) {
+        const midi = noteToMidi(pitch, mod);
+        lightKey(pitch, mod);
+        startLiveTone(midiFreq(midi));
+        const acc = mod === "sharp" ? "#" : mod === "flat" ? "b" : mod === "semitone" ? "s" : "";
+        nowEl.textContent = `按住 ${acc}${pitch}`;
+      } else {
+        // already sounding older key; just mark this key pressed in UI
+        const cur = soundingHold();
+        const el = document.querySelector(`.notes .key[data-pitch="${CSS.escape(pitch)}"]`);
+        if (el) el.classList.add("on");
+        if (cur) {
+          const acc = cur.mod === "sharp" ? "#" : cur.mod === "flat" ? "b" : cur.mod === "semitone" ? "s" : "";
+          nowEl.textContent = `按住 ${acc}${cur.pitch}（+${holdStack.length - 1}）`;
+        }
+      }
+    }
+
+    /** Release one key, or all if fromKey omitted. */
+    function releasePerformance(fromKey) {
+      if (!holdStack.length) return;
+      if (fromKey == null) {
+        while (holdStack.length) releasePerformance(holdStack[0].fromKey);
+        return;
+      }
+      const idx = holdStack.findIndex((h) => h.fromKey === fromKey);
+      if (idx < 0) return;
+      const held = holdStack[idx];
+      holdStack.splice(idx, 1);
+      const now = performance.now();
+      const wasSounding = idx === 0;
+
+      if (recording && held.sounded) {
+        const ms = Math.max(40, now - held.t0);
+        recCurrent.tokens.push(pitchToken(held.pitch, held.mod, quantizeNoteDur(ms)));
+        lastNoteEndAt = now;
+        updateRecUi();
+      } else if (!recording) {
+        lastNoteEndAt = null;
+      }
+
+      if (wasSounding) {
+        stopLiveTone();
+        if (holdStack.length) {
+          const next = holdStack[0];
+          next.t0 = now;
+          next.sounded = true;
+          const midi = noteToMidi(next.pitch, next.mod);
+          paintSoundingKey();
+          // also show other held pitch keys
+          for (let i = 1; i < holdStack.length; i++) {
+            const el = document.querySelector(`.notes .key[data-pitch="${CSS.escape(holdStack[i].pitch)}"]`);
+            if (el) el.classList.add("on");
+          }
+          startLiveTone(midiFreq(midi));
+          const acc = next.mod === "sharp" ? "#" : next.mod === "flat" ? "b" : next.mod === "semitone" ? "s" : "";
+          nowEl.textContent = `按住 ${acc}${next.pitch}`;
+        } else {
+          clearKeys();
+          paintModUi();
+          nowEl.textContent = "松开";
+        }
+      } else {
+        paintSoundingKey();
+        for (let i = 1; i < holdStack.length; i++) {
+          const el = document.querySelector(`.notes .key[data-pitch="${CSS.escape(holdStack[i].pitch)}"]`);
+          if (el) el.classList.add("on");
+        }
+      }
+    }
+
+    document.querySelectorAll(".key.mod").forEach((el) => {
+      el.addEventListener("click", () => setLockedMod(el.dataset.mod));
+    });
+    setLockedMod("natural");
+
+    document.querySelectorAll(".key[data-pitch]").forEach((el) => {
+      el.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        el.setPointerCapture?.(e.pointerId);
+        beginPerformance(el.dataset.pitch, "pointer:" + el.dataset.pitch);
+      });
+      const up = (e) => {
+        e.preventDefault();
+        releasePerformance("pointer:" + el.dataset.pitch);
+      };
+      el.addEventListener("pointerup", up);
+      el.addEventListener("pointercancel", up);
+    });
+
+    document.getElementById("btnRec").addEventListener("click", toggleRecording);
+    document.getElementById("btnRecPhrase").addEventListener("click", endPhrase);
+    document.getElementById("btnRecUndo").addEventListener("click", undoToken);
+    document.getElementById("btnRecClear").addEventListener("click", clearRecording);
+    document.getElementById("btnRecCommit").addEventListener("click", () => commitRecording());
+    document.getElementById("recBpm").addEventListener("change", refreshRecDraft);
+    document.getElementById("restScale").addEventListener("input", () => {
+      refreshDuration();
+      refreshRecDraft();
+    });
+    document.getElementById("btnSaveRestScale").addEventListener("click", async () => {
+      const scale = liveRestScale();
+      scoreEl.value = applyRestScaleToText(scoreEl.value, scale);
+      refreshEditorChrome();
+      refreshDuration();
+      setStatus(`已写入 rest_scale: ${scale}`, "ok");
+      if (currentScorePath && confirm(`保存到 ${currentScorePath}？`)) {
+        try {
+          await saveScoreToDisk(currentScorePath, scoreEl.value);
+          setStatus(`已保存 rest_scale → ${currentScorePath}`, "ok");
+        } catch (err) {
+          setStatus("写盘失败: " + err.message, "err");
+        }
+      }
+    });
+
+    // Digits = notes only; letters = hold modifiers
+    const NUM_PITCH = {
+      Numpad1: "1", Numpad2: "2", Numpad3: "3",
+      Numpad4: "4", Numpad5: "5", Numpad6: "6",
+      Numpad7: "7", Numpad8: "1'",
+      Digit1: "1", Digit2: "2", Digit3: "3",
+      Digit4: "4", Digit5: "5", Digit6: "6",
+      Digit7: "7", Digit8: "1'",
+    };
+    const HOLD_MOD = {
+      KeyQ: "semitone", // 半音 +1
+      KeyW: "flat",     // 降调 -八度
+      KeyE: "sharp",    // 升调 +八度
+    };
+
+    function typingInField() {
+      const el = document.activeElement;
+      return el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.isContentEditable);
+    }
+
+    window.addEventListener("keydown", (e) => {
+      // Transport: always available (even when editing score)
+      if (e.code === "Escape") {
+        e.preventDefault();
+        doStop();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+        e.preventDefault();
+        saveCurrentScore();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.code === "Space") {
+        e.preventDefault();
+        togglePlayPause();
+        return;
+      }
+      if (e.code === "Space" && !typingInField() && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        togglePlayPause();
+        return;
+      }
+
+      if (typingInField()) return;
+      if (e.repeat) {
+        if (NUM_PITCH[e.code] || HOLD_MOD[e.code]) e.preventDefault();
+        return;
+      }
+      if (e.code === "KeyR" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        toggleRecording();
+        return;
+      }
+      if (e.code === "Enter") {
+        if (recording) {
+          e.preventDefault();
+          endPhrase();
+        }
+        return;
+      }
+      if (e.code === "Backspace" && recording) {
+        e.preventDefault();
+        undoToken();
+        return;
+      }
+      if (HOLD_MOD[e.code]) {
+        e.preventDefault();
+        if (heldKeys.has(e.code)) return;
+        heldKeys.add(e.code);
+        pushHoldMod(HOLD_MOD[e.code]);
+        return;
+      }
+      if (NUM_PITCH[e.code]) {
+        e.preventDefault();
+        if (heldKeys.has(e.code)) return;
+        heldKeys.add(e.code);
+        beginPerformance(NUM_PITCH[e.code], e.code);
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (typingInField()) return;
+      if (HOLD_MOD[e.code]) {
+        heldKeys.delete(e.code);
+        popHoldMod(HOLD_MOD[e.code]);
+        e.preventDefault();
+        return;
+      }
+      if (NUM_PITCH[e.code]) {
+        heldKeys.delete(e.code);
+        e.preventDefault();
+        releasePerformance(e.code);
+      }
+    });
+
+    window.addEventListener("beforeunload", (e) => {
+      if (!scoreDirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    });
+
+    updateRecUi();
+    syncRestScaleFromScore();
+    updateScorePathUi();
+
+    document.getElementById("file").addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      scoreEl.value = await f.text();
+      refreshEditorChrome();
+      document.getElementById("preset").value = "";
+      setCurrentScorePath(f.name.endsWith(".txt") ? `scores/${f.name}` : null);
+      markScoreClean(scoreEl.value);
+      updateBpmReadout();
+      refreshDuration();
+      setStatus("已载入 " + f.name, "ok");
+    });
+
+    document.getElementById("preset").addEventListener("change", (e) => {
+      const v = e.target.value;
+      if (v && PRESETS[v]) {
+        scoreEl.value = PRESETS[v];
+        refreshEditorChrome();
+        setCurrentScorePath(`scores/${v}.txt`);
+        markScoreClean(scoreEl.value);
+        syncRestScaleFromScore();
+        updateBpmReadout();
+        refreshDuration();
+        setStatus("已载入: " + v, "ok");
+      }
+    });
+
+    function fillPresetSelect(scores) {
+      const sel = document.getElementById("preset");
+      const keep = sel.value;
+      sel.innerHTML = '<option value="">（粘贴/打开文件）</option>';
+      for (const s of scores) {
+        const opt = document.createElement("option");
+        opt.value = s.id;
+        opt.textContent = s.title || s.id;
+        sel.appendChild(opt);
+      }
+      if (keep && PRESETS[keep]) sel.value = keep;
+    }
+
+    async function tryFetchScores() {
+      let list = [];
+      try {
+        const res = await fetch("/api/list-scores");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.ok && Array.isArray(data.scores)) list = data.scores;
+        }
+      } catch (_) { /* ignore */ }
+
+      if (!list.length) {
+        // fallback static ids (./dharm preview 才有 API)
+        list = [
+          { id: "tonghua", path: "scores/tonghua.txt", title: "童话（光良）" },
+          { id: "dabei", path: "scores/dabei.txt", title: "大悲咒" },
+          { id: "chongfenghao", path: "scores/chongfenghao.txt", title: "冲锋号" },
+          { id: "lemon", path: "scores/lemon.txt", title: "Lemon" },
+          { id: "woyuanyi", path: "scores/woyuanyi.txt", title: "我愿意" },
+          { id: "qianyu", path: "scores/qianyu.txt", title: "千与千寻" },
+          { id: "gechangzuguo", path: "scores/gechangzuguo.txt", title: "歌唱祖国" },
+          { id: "xiwang", path: "scores/xiwang.txt", title: "在希望的田野上" },
+          { id: "beijiaer", path: "scores/beijiaer.txt", title: "贝加尔湖畔" },
+          { id: "blues", path: "scores/blues.txt", title: "蓝调小品" },
+          { id: "example", path: "scores/example.txt", title: "示例音阶" },
+        ];
+      }
+
+      for (const s of list) {
+        try {
+          const res = await fetch("/" + s.path);
+          if (res.ok) PRESETS[s.id] = await res.text();
+        } catch (_) { /* file:// */ }
+      }
+
+      const available = list.filter((s) => PRESETS[s.id]);
+      fillPresetSelect(available);
+      if (!available.length) {
+        setStatus("请用 ./dharm preview 打开（才能加载 scores/），或手动打开 .txt", "err");
+        return;
+      }
+      const remembered = lastScorePath();
+      const prefer =
+        available.find((s) => s.path === remembered || `scores/${s.id}.txt` === remembered) ||
+        available.find((s) => s.id === "tonghua") ||
+        available[0];
+      scoreEl.value = PRESETS[prefer.id];
+      refreshEditorChrome();
+      document.getElementById("preset").value = prefer.id;
+      setCurrentScorePath(prefer.path);
+      markScoreClean(scoreEl.value);
+      syncRestScaleFromScore();
+      updateBpmReadout();
+      refreshDuration();
+      setStatus("已载入 " + prefer.path, "ok");
+    }
+    tryFetchScores();
+  </script>
+</body>
+</html>
