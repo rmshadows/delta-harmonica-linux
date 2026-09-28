@@ -8,9 +8,9 @@ profile = "z60u"
 
 # —— 游戏发声延迟补偿（始终生效）——
 # 模式1 press_early：下一音提前多少 ms 按下
-press_early = 250
+press_early = 100
 # 模式2 hold_extra：每个音多按住多少 ms
-hold_extra = 200
+hold_extra = 0
 # 净起音间隔 ≈ 谱面时值 + hold_extra - press_early
 # 播放中 z/x 调 press_early、c/v 调 hold_extra（步长 50），结束写回本文件
 
