@@ -539,6 +539,7 @@
     <button type="button" class="primary" id="btnPlay">播放</button>
     <button type="button" id="btnStop">停止</button>
     <button type="button" id="btnSaveScore" title="保存到 scores/*.txt">保存乐谱</button>
+    <button type="button" id="btnReloadScore" title="从磁盘重新加载当前乐谱">重新加载</button>
     <button type="button" id="btnRec">● 录制</button>
     <label class="file">打开 .txt<input type="file" id="file" accept=".txt,text/plain" /></label>
     <label>乐谱
@@ -575,7 +576,7 @@
     </div>
     <div class="row" id="tempoRow" title="在此区域滚动鼠标滚轮可调速">
       <button type="button" id="btnSlower">−</button>
-      <label>速度 × <input type="number" id="speed" value="1" min="0.5" max="2.5" step="0.05" style="width:4.5rem" /></label>
+      <label>速度 × <input type="number" id="speed" value="1" min="0.25" max="3" step="0.05" style="width:4.5rem" title="立刻影响预览播放（无需写入乐谱）" /></label>
       <button type="button" id="btnFaster">+</button>
       <span id="bpmReadout" style="color:var(--muted);font-family:var(--mono)">谱面 BPM — · 实际 —</span>
       <button type="button" id="btnSaveBpm">将当前速度写入乐谱…</button>
@@ -874,6 +875,8 @@
     }
 
     function silenceScheduled() {
+      // Stop score/timeline oscillators only. Do NOT mute masterGain —
+      // that would cut any live held keys still sounding.
       const ctx = audioCtx;
       const now = ctx && ctx.state !== "closed" ? ctx.currentTime : 0;
       for (const v of scheduledVoices) {
@@ -888,12 +891,6 @@
         try { v.gain && v.gain.disconnect(); } catch (_) {}
       }
       scheduledVoices = [];
-      if (masterGain && ctx && ctx.state !== "closed") {
-        try {
-          masterGain.gain.cancelScheduledValues(now);
-          masterGain.gain.setValueAtTime(0, now);
-        } catch (_) {}
-      }
     }
 
     /** Game-like: sound while held, silence when released. */
@@ -1299,7 +1296,52 @@
     }
 
     function clampSpeed(v) {
-      return Math.round(Math.max(0.5, Math.min(2.5, v)) * 100) / 100;
+      return Math.round(Math.max(0.25, Math.min(3, v)) * 100) / 100;
+    }
+
+    function readSpeed() {
+      return clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+    }
+
+    /** Synchronously tear down Web Audio so nothing keeps ringing. */
+    function killAudioGraph() {
+      stopLiveTone();
+      silenceScheduled();
+      scheduledVoices = [];
+      liveVoice = null;
+      const ctx = audioCtx;
+      audioCtx = null;
+      masterGain = null;
+      if (ctx && ctx.state !== "closed") {
+        try { ctx.close(); } catch (_) {}
+      }
+    }
+
+    /**
+     * Apply new × speed to the timeline.
+     * If something was playing: stop cleanly (no auto-restart — that stacked voices).
+     * Next「播放」uses the new speed.
+     */
+    function applySpeedChange() {
+      const speed = readSpeed();
+      document.getElementById("speed").value = String(speed);
+      updateBpmReadout();
+      const ratio = Number(progressEl.value) / Number(progressEl.max || 1000);
+      const wasPlaying = playing;
+      if (wasPlaying) {
+        playToken++;
+        playing = false;
+        killAudioGraph();
+        clearKeys();
+        nowEl.textContent = "已调速";
+      }
+      refreshDuration();
+      setProgressUi(ratio * (lastDuration || 0), lastDuration || 0);
+      if (wasPlaying) {
+        setStatus(`速度 ×${speed} · 已停，按「播放」以新速度继续`, "ok");
+      } else {
+        setStatus(`速度 ×${speed}`, "ok");
+      }
     }
 
     function formatTime(sec) {
@@ -1624,7 +1666,7 @@
 
     function refreshDuration() {
       try {
-        const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+        const speed = readSpeed();
         const parsed = parseScore(scoreEl.value);
         const built = buildSchedule(parsed, speed);
         cachedItems = built.items;
@@ -1649,13 +1691,8 @@
     async function playScore(startAtSec, endAtSec) {
       const token = ++playToken;
       playing = true;
-      stopLiveTone();
-      silenceScheduled();
-      if (audioCtx && audioCtx.state !== "closed") {
-        try { await audioCtx.close(); } catch (_) {}
-      }
-      audioCtx = null;
-      masterGain = null;
+      // Sync kill — never await close() here (that raced and stacked voices on seek/speed).
+      killAudioGraph();
       let parsed;
       try {
         parsed = parseScore(scoreEl.value);
@@ -1664,7 +1701,11 @@
         setStatus(String(e.message || e), "err");
         return;
       }
-      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      if (token !== playToken) {
+        playing = false;
+        return;
+      }
+      const speed = readSpeed();
       document.getElementById("speed").value = String(speed);
       updateBpmReadout();
 
@@ -1684,7 +1725,7 @@
       const phraseOnly = stopAt < duration - 0.02;
       if (!phraseOnly) {
         setStatus(
-          `播放「${parsed.title}」 谱面 ${parsed.bpm.toFixed(0)} · 实际 ${(parsed.bpm * speed).toFixed(0)}`,
+          `播放「${parsed.title}」 ×${speed} · 谱面 ${parsed.bpm.toFixed(0)} → 实际 ${(parsed.bpm * speed).toFixed(0)}`,
           "ok"
         );
       }
@@ -1701,11 +1742,16 @@
       highlightLyric(lyricIndex);
       highlightScoreLine(activeLine);
 
+      if (token !== playToken) {
+        playing = false;
+        return;
+      }
       const ctx = ensureAudio();
       const audioT0 = ctx.currentTime + 0.06;
       const wallStart = performance.now();
 
       for (const item of items) {
+        if (token !== playToken) break;
         if (item.at >= stopAt - 1e-6) break;
         const end = Math.min(item.at + (item.dur || 0), stopAt);
         if (end <= startAt + 1e-6) continue;
@@ -1715,6 +1761,11 @@
         if (item.kind === "note" && remain > 0.02) {
           holdTone(midiFreq(item.midi), remain, when);
         }
+      }
+      if (token !== playToken) {
+        killAudioGraph();
+        playing = false;
+        return;
       }
 
       function tick() {
@@ -1792,7 +1843,7 @@
     }
 
     function updateBpmReadout() {
-      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      const speed = readSpeed();
       document.getElementById("speed").value = String(speed);
       const base = readScoreBpm();
       const el = document.getElementById("bpmReadout");
@@ -1806,8 +1857,7 @@
     function bumpSpeed(delta) {
       const input = document.getElementById("speed");
       input.value = String(clampSpeed((parseFloat(input.value) || 1) + delta));
-      updateBpmReadout();
-      refreshDuration();
+      applySpeedChange();
     }
 
     function applyBpmToText(text, newBpm) {
@@ -1844,18 +1894,10 @@
     function doStop() {
       playToken++;
       playing = false;
-      stopLiveTone();
-      silenceScheduled();
+      killAudioGraph();
       clearKeys();
       nowEl.textContent = "已停止";
       setStatus("已停止");
-      // hard-cut: close graph so nothing can keep ringing
-      const ctx = audioCtx;
-      audioCtx = null;
-      masterGain = null;
-      if (ctx && ctx.state !== "closed") {
-        try { ctx.close(); } catch (_) {}
-      }
     }
 
     function togglePlayPause() {
@@ -1886,13 +1928,14 @@
 
     document.getElementById("btnSlower").addEventListener("click", () => bumpSpeed(-0.05));
     document.getElementById("btnFaster").addEventListener("click", () => bumpSpeed(0.05));
+    let speedInputTimer = null;
     document.getElementById("speed").addEventListener("change", () => {
-      updateBpmReadout();
-      refreshDuration();
+      applySpeedChange();
     });
     document.getElementById("speed").addEventListener("input", () => {
       updateBpmReadout();
-      refreshDuration();
+      clearTimeout(speedInputTimer);
+      speedInputTimer = setTimeout(() => applySpeedChange(), 200);
     });
     let scoreInputTimer = null;
     let scoreComposing = false;
@@ -1942,7 +1985,7 @@
     }, { passive: true });
 
     document.getElementById("btnSaveBpm").addEventListener("click", async () => {
-      const speed = clampSpeed(parseFloat(document.getElementById("speed").value) || 1);
+      const speed = readSpeed();
       const base = readScoreBpm();
       if (base == null) {
         setStatus("乐谱解析失败，无法写 BPM", "err");
@@ -2212,9 +2255,12 @@
      */
     function beginPerformance(pitch, fromKey) {
       if (holdStack.some((h) => h.fromKey === fromKey)) return;
-      playToken++;
-      playing = false;
-      silenceScheduled();
+      // Cancel score playback only when needed; never chop an existing live hold.
+      if (playing || holdStack.length === 0) {
+        playToken++;
+        playing = false;
+        silenceScheduled();
+      }
       const now = performance.now();
       const becomesSounding = holdStack.length === 0;
       if (recording && becomesSounding) maybeRecordGap(now);
@@ -2228,7 +2274,7 @@
         const acc = mod === "sharp" ? "#" : mod === "flat" ? "b" : mod === "semitone" ? "s" : "";
         nowEl.textContent = `按住 ${acc}${pitch}`;
       } else {
-        // already sounding older key; just mark this key pressed in UI
+        // First key keeps sounding; later keys only light up until earlier ones release.
         const cur = soundingHold();
         const el = document.querySelector(`.notes .key[data-pitch="${CSS.escape(pitch)}"]`);
         if (el) el.classList.add("on");
@@ -2455,18 +2501,86 @@
       setStatus("已载入 " + f.name, "ok");
     });
 
-    document.getElementById("preset").addEventListener("change", (e) => {
-      const v = e.target.value;
-      if (v && PRESETS[v]) {
-        scoreEl.value = PRESETS[v];
-        refreshEditorChrome();
-        setCurrentScorePath(`scores/${v}.txt`);
-        markScoreClean(scoreEl.value);
-        syncRestScaleFromScore();
-        updateBpmReadout();
-        refreshDuration();
-        setStatus("已载入: " + v, "ok");
+    async function fetchScoreText(path) {
+      const res = await fetch("/" + path.replace(/^\//, ""), { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    }
+
+    async function loadScoreIntoEditor(id, path, { quiet = false } = {}) {
+      const text = await fetchScoreText(path);
+      PRESETS[id] = text;
+      scoreEl.value = text;
+      refreshEditorChrome();
+      setCurrentScorePath(path);
+      document.getElementById("preset").value = id;
+      markScoreClean(text);
+      syncRestScaleFromScore();
+      updateBpmReadout();
+      refreshDuration();
+      if (!quiet) setStatus("已载入 " + path, "ok");
+      return text;
+    }
+
+    async function reloadCurrentScore({ force = false, quietIfSame = false } = {}) {
+      if (!currentScorePath || !currentScorePath.startsWith("scores/")) {
+        setStatus("当前没有绑定 scores/ 文件", "err");
+        return;
       }
+      if (scoreDirty && !force) {
+        if (!confirm("编辑框有未保存修改，丢弃并从磁盘重新加载？")) return;
+      }
+      const id = currentScorePath.replace(/^scores\//, "").replace(/\.txt$/, "");
+      try {
+        const prev = scoreEl.value;
+        const text = await loadScoreIntoEditor(id, currentScorePath, { quiet: true });
+        if (text === prev) {
+          if (!quietIfSame) setStatus("已是磁盘最新: " + currentScorePath, "ok");
+        } else {
+          setStatus("已从磁盘更新: " + currentScorePath, "ok");
+        }
+      } catch (err) {
+        setStatus("重新加载失败: " + err.message, "err");
+      }
+    }
+
+    document.getElementById("btnReloadScore").addEventListener("click", () => {
+      reloadCurrentScore();
+    });
+
+    document.getElementById("preset").addEventListener("change", async (e) => {
+      const v = e.target.value;
+      if (!v) return;
+      if (scoreDirty && !confirm("有未保存修改，切换乐谱将丢弃编辑内容？")) {
+        const cur = currentScorePath
+          ? currentScorePath.replace(/^scores\//, "").replace(/\.txt$/, "")
+          : "";
+        e.target.value = cur;
+        return;
+      }
+      try {
+        await loadScoreIntoEditor(v, `scores/${v}.txt`);
+      } catch (err) {
+        if (PRESETS[v]) {
+          scoreEl.value = PRESETS[v];
+          refreshEditorChrome();
+          setCurrentScorePath(`scores/${v}.txt`);
+          markScoreClean(scoreEl.value);
+          syncRestScaleFromScore();
+          updateBpmReadout();
+          refreshDuration();
+          setStatus("已载入缓存: " + v + "（磁盘读取失败）", "err");
+        } else {
+          setStatus("载入失败: " + err.message, "err");
+        }
+      }
+    });
+
+    // When returning to the tab, pick up scores edited outside the browser.
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") return;
+      if (!currentScorePath || scoreDirty || playing) return;
+      reloadCurrentScore({ force: true, quietIfSame: true }).catch(() => {});
     });
 
     function fillPresetSelect(scores) {
@@ -2479,13 +2593,13 @@
         opt.textContent = s.title || s.id;
         sel.appendChild(opt);
       }
-      if (keep && PRESETS[keep]) sel.value = keep;
+      if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
     }
 
     async function tryFetchScores() {
       let list = [];
       try {
-        const res = await fetch("/api/list-scores");
+        const res = await fetch("/api/list-scores", { cache: "no-store" });
         if (res.ok) {
           const data = await res.json();
           if (data.ok && Array.isArray(data.scores)) list = data.scores;
@@ -2511,8 +2625,7 @@
 
       for (const s of list) {
         try {
-          const res = await fetch("/" + s.path);
-          if (res.ok) PRESETS[s.id] = await res.text();
+          PRESETS[s.id] = await fetchScoreText(s.path);
         } catch (_) { /* file:// */ }
       }
 
@@ -2527,15 +2640,19 @@
         available.find((s) => s.path === remembered || `scores/${s.id}.txt` === remembered) ||
         available.find((s) => s.id === "tonghua") ||
         available[0];
-      scoreEl.value = PRESETS[prefer.id];
-      refreshEditorChrome();
-      document.getElementById("preset").value = prefer.id;
-      setCurrentScorePath(prefer.path);
-      markScoreClean(scoreEl.value);
-      syncRestScaleFromScore();
-      updateBpmReadout();
-      refreshDuration();
-      setStatus("已载入 " + prefer.path, "ok");
+      try {
+        await loadScoreIntoEditor(prefer.id, prefer.path);
+      } catch (_) {
+        scoreEl.value = PRESETS[prefer.id];
+        refreshEditorChrome();
+        document.getElementById("preset").value = prefer.id;
+        setCurrentScorePath(prefer.path);
+        markScoreClean(scoreEl.value);
+        syncRestScaleFromScore();
+        updateBpmReadout();
+        refreshDuration();
+        setStatus("已载入 " + prefer.path, "ok");
+      }
     }
     tryFetchScores();
   </script>

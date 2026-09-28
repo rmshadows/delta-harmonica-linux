@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import select
 import sys
+import termios
+import tty
+import threading
 import time
 
 from delta_harmonica.models import (
@@ -29,6 +33,8 @@ class Player:
         *,
         modifier_tap_ms: int = 60,
         hold_extra_ms: int = 0,
+        press_early_ms: int = 0,
+        speed: float = 1.0,
         assume_modifier: Modifier = Modifier.NATURAL,
         display_width: int | None = None,
         display_height: int | None = None,
@@ -36,38 +42,69 @@ class Player:
         self.profile = profile
         self.touch = touch
         self.modifier_tap_ms = modifier_tap_ms
-        # Game needs a short press before the harmonica sounds; add to each note.
+        # Mode 2: hold each key longer so the game has time to sound.
         self.hold_extra_ms = max(0, int(hold_extra_ms))
+        # Mode 1: start the next key this many ms early (legato / cover latency).
+        self.press_early_ms = max(0, int(press_early_ms))
+        self.speed = max(0.25, min(3.0, float(speed)))
         self.current_modifier = assume_modifier
-        # Current phone display size (adb touch space). Window size unused.
         self.display_width = display_width or profile.device_width
         self.display_height = display_height or profile.device_height
+        self._stop = False
+
+    def _scale_ms(self, ms: int) -> int:
+        return max(1, int(round(ms / self.speed)))
 
     def _note_hold_ms(self, duration_ms: int) -> int:
         return max(1, int(duration_ms) + self.hold_extra_ms)
 
-    def _tap_ui(self, key: str, hold_ms: int) -> None:
-        pt = self.profile.resolve_key(
+    def _onset_gap_ms(self, duration_ms: int) -> int:
+        """Wall-clock from this press to the next press."""
+        return max(1, int(duration_ms) + self.hold_extra_ms - self.press_early_ms)
+
+    def _resolve(self, key: str):
+        return self.profile.resolve_key(
             key,
             display_width=self.display_width,
             display_height=self.display_height,
         )
-        self.touch.tap(pt, hold_ms=hold_ms)
+
+    def _tap_ui(self, key: str, hold_ms: int) -> None:
+        self.touch.tap(self._resolve(key), hold_ms=hold_ms)
+
+    def _press_note(self, key: str, duration_ms: int) -> None:
+        """Press one note honoring hold_extra + press_early (single finger).
+
+        interval = duration + hold_extra - press_early  (next onset)
+        hold     = duration + hold_extra
+        """
+        from delta_harmonica.touch import TouchBackend
+
+        hold_ms = self._scale_ms(self._note_hold_ms(duration_ms))
+        gap_ms = self._scale_ms(self._onset_gap_ms(duration_ms))
+        pt = self._resolve(key)
+        down_ms = min(hold_ms, gap_ms)
+        idle_ms = max(0, gap_ms - hold_ms)
+        if self.touch.backend == TouchBackend.MOTIONEVENT:
+            self.touch.down(pt)
+            self.touch.sleep_ms(down_ms)
+            self.touch.up(pt)
+        else:
+            # swipe / dry-run: atomic press for the down portion
+            self.touch.press(pt, down_ms)
+        if idle_ms:
+            self.touch.sleep_ms(idle_ms)
 
     def _ensure_modifier(self, modifier: Modifier) -> None:
         if modifier == self.current_modifier:
             return
         ui = MODIFIER_TO_UI[modifier]
-        self._tap_ui(ui, self.modifier_tap_ms)
+        self._tap_ui(ui, self._scale_ms(self.modifier_tap_ms))
         self.current_modifier = modifier
-        self.touch.sleep_ms(40)
+        self.touch.sleep_ms(self._scale_ms(40))
 
     @staticmethod
     def _phone_keys(note: PlayNote) -> tuple[Modifier, str]:
-        """Map score note onto game UI keys.
-
-        ##1 (+2 octaves) → 升调 + 1' (same sounding as #1').
-        """
         if note.modifier == Modifier.SEMITONE:
             return Modifier.SEMITONE, PITCH_TO_UI[note.pitch]
         if note.octaves >= 2 and note.pitch == PitchKey.N1:
@@ -86,6 +123,36 @@ class Player:
             return "b" * (-note.octaves)
         return ""
 
+    def _speed_listener(self) -> None:
+        """Background: +/- or [] change speed; q/Esc stop. Needs a TTY."""
+        if not sys.stdin.isatty():
+            return
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not self._stop:
+                r, _, _ = select.select([sys.stdin], [], [], 0.1)
+                if not r:
+                    continue
+                ch = sys.stdin.read(1)
+                if ch in ("+", "=", "]"):
+                    self.speed = min(3.0, round(self.speed + 0.05, 2))
+                    print(f"\n  ▶ speed ×{self.speed:.2f}", flush=True)
+                elif ch in ("-", "["):
+                    self.speed = max(0.25, round(self.speed - 0.05, 2))
+                    print(f"\n  ▶ speed ×{self.speed:.2f}", flush=True)
+                elif ch in ("q", "Q", "\x1b"):
+                    self._stop = True
+                    print("\n  ▶ stop", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:  # noqa: BLE001
+                pass
+
     def play(
         self,
         score: Score,
@@ -99,44 +166,64 @@ class Player:
                 time.sleep(1)
 
         if verbose:
-            extra = (
-                f" hold_extra={self.hold_extra_ms}ms" if self.hold_extra_ms else ""
-            )
+            bits = []
+            if self.hold_extra_ms:
+                bits.append(f"hold_extra={self.hold_extra_ms}ms")
+            if self.press_early_ms:
+                bits.append(f"press_early={self.press_early_ms}ms")
+            bits.append(f"speed=×{self.speed:.2f}")
             print(
                 f"playing '{score.title}' bpm={score.bpm:.1f} "
-                f"backend={self.touch.backend.value}{extra}",
+                f"backend={self.touch.backend.value} {' '.join(bits)}",
+                flush=True,
+            )
+            print(
+                "  keys: +/] faster · -/ [ slower · q stop",
                 flush=True,
             )
 
-        for ev in score.events:
-            if isinstance(ev, SetRegister):
-                # 游戏里音域数字只是状态显示，不是可点按键；八度用升调/降调
-                continue
-            if isinstance(ev, SetModifier):
-                self._ensure_modifier(ev.modifier)
-            elif isinstance(ev, PlayNote):
-                mod, ui = self._phone_keys(ev)
-                self._ensure_modifier(mod)
-                hold = self._note_hold_ms(ev.duration_ms)
-                if verbose:
-                    print(
-                        f"  {self._acc_label(ev)}{ev.pitch.value} {hold}ms",
-                        flush=True,
-                    )
-                self._tap_ui(ui, hold)
-            elif isinstance(ev, Rest):
-                ms = max(1, int(round(ev.duration_ms * score.rest_scale)))
-                if verbose:
-                    print(f"  rest {ms}ms", flush=True)
-                self.touch.sleep_ms(ms)
-            elif isinstance(ev, LyricMark):
-                if verbose:
-                    print(f"  ▶ {ev.text}", flush=True)
-            else:
-                print(f"  unknown event {ev!r}", file=sys.stderr)
+        self._stop = False
+        aborted = False
+        listener = threading.Thread(target=self._speed_listener, daemon=True)
+        listener.start()
+
+        try:
+            for ev in score.events:
+                if self._stop:
+                    aborted = True
+                    break
+                if isinstance(ev, SetRegister):
+                    continue
+                if isinstance(ev, SetModifier):
+                    self._ensure_modifier(ev.modifier)
+                elif isinstance(ev, PlayNote):
+                    mod, ui = self._phone_keys(ev)
+                    self._ensure_modifier(mod)
+                    hold = self._scale_ms(self._note_hold_ms(ev.duration_ms))
+                    gap = self._scale_ms(self._onset_gap_ms(ev.duration_ms))
+                    if verbose:
+                        print(
+                            f"  {self._acc_label(ev)}{ev.pitch.value} "
+                            f"hold={hold}ms gap={gap}ms ×{self.speed:.2f}",
+                            flush=True,
+                        )
+                    self._press_note(ui, ev.duration_ms)
+                elif isinstance(ev, Rest):
+                    ms = max(1, int(round(ev.duration_ms * score.rest_scale)))
+                    ms = self._scale_ms(ms)
+                    if verbose:
+                        print(f"  rest {ms}ms ×{self.speed:.2f}", flush=True)
+                    self.touch.sleep_ms(ms)
+                elif isinstance(ev, LyricMark):
+                    if verbose:
+                        print(f"  ▶ {ev.text}", flush=True)
+                else:
+                    print(f"  unknown event {ev!r}", file=sys.stderr)
+        finally:
+            self._stop = True
 
         if verbose:
-            print("done.", flush=True)
+            print("stopped." if aborted else "done.", flush=True)
 
 
 def format_timeline(score: Score) -> str:

@@ -61,6 +61,34 @@ class TouchController:
     def tap(self, point: Point, hold_ms: int = 50) -> None:
         self.press(point, hold_ms)
 
+    def down(self, point: Point) -> None:
+        if self.backend == TouchBackend.DRY_RUN:
+            print(f"[dry-run] down ({point.x},{point.y})")
+            return
+        if self.backend == TouchBackend.MOTIONEVENT:
+            shell(
+                f"input motionevent DOWN {point.x} {point.y}",
+                serial=self.serial,
+            )
+            return
+        # swipe backend: remember point; actual hold done in up()/press()
+        self._swipe_point = point
+
+    def up(self, point: Point | None = None) -> None:
+        if self.backend == TouchBackend.DRY_RUN:
+            print("[dry-run] up")
+            return
+        if self.backend == TouchBackend.MOTIONEVENT:
+            if point is None:
+                raise AdbError("motionevent UP needs coordinates")
+            shell(
+                f"input motionevent UP {point.x} {point.y}",
+                serial=self.serial,
+            )
+            return
+        # swipe: zero-length done in press(); up alone is no-op after press
+        return
+
     def press(self, point: Point, hold_ms: int) -> None:
         hold_ms = max(1, int(hold_ms))
         if self.backend == TouchBackend.DRY_RUN:

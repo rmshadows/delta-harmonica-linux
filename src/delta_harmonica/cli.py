@@ -23,6 +23,7 @@ from delta_harmonica.adb_util import (
     which_scrcpy,
 )
 from delta_harmonica.calibrate import CalibrateError, run_calibrate, run_calibrate_test
+from delta_harmonica.config import load_config
 from delta_harmonica.midi_convert import convert_midi
 from delta_harmonica.paths import (
     profiles_dir,
@@ -40,7 +41,10 @@ from delta_harmonica.window import WindowError, find_scrcpy_window_id, get_windo
 
 app = typer.Typer(
     name="dharm",
-    help="三角洲口琴练习辅助（乐谱解析 / 标定 / 练习）",
+    help="三角洲口琴练习辅助（乐谱解析 / 标定 / 练习）\n\n"
+    "示例:  dharm play -p z60u beijiaer\n"
+    "      dharm -p z60u play beijiaer\n"
+    "      dharm play beijiaer   # 若 dharm.toml 已设 profile",
     no_args_is_help=True,
     add_completion=True,
 )
@@ -56,8 +60,14 @@ def _complete_scores(incomplete: str) -> list[str]:
     if not d.is_dir():
         return []
     names: list[str] = []
+    root = project_root()
     for f in sorted(d.glob("*.txt")):
-        for cand in (f.stem, f.name, str(f)):
+        rel = f"scores/{f.name}"
+        try:
+            rel_cwd = str(f.relative_to(Path.cwd()))
+        except ValueError:
+            rel_cwd = rel
+        for cand in (f.stem, f.name, rel, f"./{rel}", rel_cwd, str(f)):
             if cand.startswith(incomplete) and cand not in names:
                 names.append(cand)
     return names
@@ -92,7 +102,16 @@ def main(
     version: bool = typer.Option(
         False, "--version", "-V", help="Show version and exit."
     ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        "-p",
+        help="Default calibration profile (also for: dharm -p NAME play …)",
+        autocompletion=_complete_profiles,
+    ),
 ) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["profile"] = profile
     if version:
         typer.echo(__version__)
         raise typer.Exit()
@@ -170,6 +189,16 @@ def doctor_cmd(
 
     typer.echo(f"scores dir: {scores_dir()}")
     typer.echo(f"profiles dir: {profiles_dir()}")
+    cfg = load_config()
+    if cfg.path and cfg.path.is_file():
+        typer.echo(
+            f"config: {cfg.path} "
+            f"(hold_extra={cfg.hold_extra}, press_early={cfg.press_early}, "
+            f"speed=×{cfg.speed}"
+            f"{f', profile={cfg.profile}' if cfg.profile else ''})"
+        )
+    else:
+        typer.echo(f"config: (none at {cfg.path or 'dharm.toml'})")
     if ok:
         typer.secho("doctor: OK", fg=typer.colors.GREEN)
     else:
@@ -246,31 +275,72 @@ def list_cmd() -> None:
 
 @app.command("play")
 def play_cmd(
-    score: str = typer.Argument(
-        ..., help="Score name or path", autocompletion=_complete_scores
-    ),
-    profile: str = typer.Option(
-        ...,
+    ctx: typer.Context,
+    profile: Optional[str] = typer.Option(
+        None,
         "--profile",
         "-p",
-        help="Calibration profile name",
+        help="Calibration profile (default: global -p / dharm.toml)",
         autocompletion=_complete_profiles,
     ),
     serial: Optional[str] = typer.Option(
         None, "--serial", "-s", autocompletion=_complete_serials
     ),
     dry_run: bool = typer.Option(False, "--dry-run", help="Print timeline / no touch"),
-    countdown: int = typer.Option(3, "--countdown", "-c", help="Seconds before start"),
-    hold_extra: int = typer.Option(
-        0,
+    countdown: Optional[int] = typer.Option(
+        None, "--countdown", "-c", help="Seconds before start (default: dharm.toml)"
+    ),
+    hold_extra: Optional[int] = typer.Option(
+        None,
         "--hold-extra",
         "-H",
-        help="Extra ms added to every note press (game needs a moment to sound)",
+        help="Mode2: extra ms to hold each key (default: dharm.toml)",
         min=0,
     ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    press_early: Optional[int] = typer.Option(
+        None,
+        "--press-early",
+        "-E",
+        help="Mode1: start next key this many ms early (default: dharm.toml)",
+        min=0,
+    ),
+    speed: Optional[float] = typer.Option(
+        None,
+        "--speed",
+        help="Initial playback speed multiplier (default: dharm.toml; live +/- during play)",
+        min=0.25,
+        max=3.0,
+    ),
+    ask: bool = typer.Option(
+        False, "--ask", help="Ask for confirmation before playing"
+    ),
+    score: str = typer.Argument(
+        ...,
+        help="Score name or path — put last: beijiaer 或 scores/beijiaer.txt",
+        autocompletion=_complete_scores,
+    ),
 ) -> None:
-    """Practice-assist play: follow a score using a calibrated profile."""
+    """Practice-assist play.
+
+    \b
+      dharm play -p z60u beijiaer
+      dharm -p z60u play scores/beijiaer.txt
+      dharm play beijiaer
+    """
+    cfg = load_config()
+    global_profile = (ctx.obj or {}).get("profile") if ctx.obj else None
+    profile_name = profile or global_profile or cfg.profile
+    if not profile_name:
+        _die(
+            "need --profile/-p or set profile = \"...\" in dharm.toml\n"
+            "  e.g.  dharm play -p z60u beijiaer"
+        )
+    hold = cfg.hold_extra if hold_extra is None else hold_extra
+    early = cfg.press_early if press_early is None else press_early
+    spd = cfg.speed if speed is None else speed
+    count = cfg.countdown if countdown is None else countdown
+    ser_opt = serial or cfg.serial
+
     try:
         score_path = resolve_score_path(score)
         parsed = parse_score_file(score_path)
@@ -278,19 +348,21 @@ def play_cmd(
         _die(str(exc))
 
     try:
-        prof_path = resolve_profile_path(profile)
+        prof_path = resolve_profile_path(profile_name)
         prof = load_profile(prof_path)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
         _die(str(exc))
 
     if dry_run:
         typer.echo(format_timeline(parsed))
-        if hold_extra:
-            typer.echo(f"# hold_extra={hold_extra}ms (applied on real play)")
+        typer.echo(
+            f"# hold_extra={hold}ms press_early={early}ms speed=×{spd}"
+            " (applied on real play)"
+        )
         return
 
     try:
-        ser = pick_serial(serial)
+        ser = pick_serial(ser_opt)
         dw, dh = get_display_size(ser)
     except AdbError as exc:
         _die(str(exc))
@@ -302,17 +374,13 @@ def play_cmd(
             fg=typer.colors.YELLOW,
         )
 
-    if not yes:
-        extra = f"\nhold_extra: {hold_extra}ms" if hold_extra else ""
-        typer.echo(
-            f"Score: {parsed.title} ({score_path.name})\n"
-            f"Profile: {prof.name} "
-            f"(calibrated {prof.device_width}x{prof.device_height}, "
-            f"play {dw}x{dh}){extra}\n"
-            "Make sure the harmonica UI is open (自然音). 八度用升调/降调。"
-        )
-        if not typer.confirm("Continue?"):
-            raise typer.Exit(0)
+    typer.echo(
+        f"Score: {parsed.title} ({score_path.name})  Profile: {prof.name}\n"
+        f"hold_extra={hold}ms  press_early={early}ms  speed=×{spd}  "
+        f"display {dw}x{dh}"
+    )
+    if ask and not typer.confirm("Continue?"):
+        raise typer.Exit(0)
 
     try:
         touch = TouchController(serial=ser, dry_run=False)
@@ -321,9 +389,11 @@ def play_cmd(
             touch,
             display_width=dw,
             display_height=dh,
-            hold_extra_ms=hold_extra,
+            hold_extra_ms=hold,
+            press_early_ms=early,
+            speed=spd,
         )
-        player.play(parsed, countdown=countdown, verbose=True)
+        player.play(parsed, countdown=count, verbose=True)
     except AdbError as exc:
         _die(str(exc))
 

@@ -16,6 +16,20 @@ class PreviewRequestHandler(SimpleHTTPRequestHandler):
         if args and str(args[0]).startswith("POST"):
             super().log_message(fmt, *args)
 
+    def end_headers(self) -> None:
+        # Scores/HTML change often during editing — never let the browser keep stale copies.
+        path = self.path.split("?", 1)[0]
+        if (
+            path.startswith("/scores/")
+            or path.startswith("/preview/")
+            or path.startswith("/api/")
+            or path.endswith(".txt")
+            or path.endswith(".html")
+        ):
+            self.send_header("Cache-Control", "no-store, max-age=0")
+            self.send_header("Pragma", "no-cache")
+        super().end_headers()
+
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
         if path == "/api/list-scores":

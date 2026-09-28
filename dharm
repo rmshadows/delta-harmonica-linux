@@ -22,4 +22,7 @@ elif [[ ! -x "${DHARM}" ]]; then
   "${PIP}" install -e "${ROOT}"
 fi
 
+# So Typer shell completion (which calls bare `dharm`) finds the venv binary.
+export PATH="${VENV}/bin:${PATH}"
+
 exec "${DHARM}" "$@"

@@ -53,17 +53,42 @@ dharm calibrate --profile myphone --test
 ```bash
 dharm list
 dharm play example -p myphone
-dharm play example -p myphone -H 80          # 每个音多按 80ms（游戏发声有延迟时）
 dharm play scores/example.txt -p myphone --dry-run   # 只打印时间轴
+```
+
+默认参数写在仓库根目录 [`dharm.toml`](dharm.toml)（可用 `-H` / `-E` / `-p` 临时覆盖）：
+
+```toml
+profile = "z60u"
+press_early = 120   # 模式1：下一音提前按下（更连贯）
+hold_extra = 200    # 模式2：每个音多按住（等游戏出声）
+speed = 1.0         # 初始倍速；播放中 +/- 或 ]/[ 可调，q 停止
+countdown = 1
+```
+
+```bash
+dharm play beijiaer
+# 播放中：+ / ] 加速，- / [ 减速，q 停止
 ```
 
 Shell 自动补全（命令 / 乐谱名 / profile）：
 
 ```bash
-# 一次安装（zsh / bash / fish 会提示写入 rc）
-dharm --install-completion
-# 或当前会话临时启用（zsh 示例）
-eval "$(dharm --show-completion zsh)"
+# 推荐：加载仓库自带的补全（支持 ./dharm 与 dharm）
+# zsh — 写入 ~/.zshrc 一次即可：
+echo "source $(pwd)/completions/dharm.zsh" >> ~/.zshrc
+source ~/.zshrc
+
+# 或用 Typer 自带安装（只注册命令名 dharm，需 PATH 含 .venv/bin）
+./dharm --install-completion
+```
+
+用法：乐谱放在**最后**：
+
+```bash
+./dharm play -p z60u beijiaer
+./dharm -p z60u play scores/beijiaer.txt
+./dharm play beijiaer          # dharm.toml 已设 profile 时可省略 -p
 ```
 
 5. （推荐）电脑上先听谱预览，再上手游：
@@ -101,7 +126,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 | `dharm calibrate -p NAME` | 在 scrcpy 窗口上依次点击标定 |
 | `dharm calibrate -p NAME --test` | 按标定依次触达各键（听音确认） |
 | `dharm list` | 列出 `scores/` 下乐谱 |
-| `dharm play SCORE -p NAME` | 按乐谱练习辅助；`-H/--hold-extra MS` 加长每个音按住时间 |
+| `dharm play SCORE [-p NAME]` | 练习辅助；`dharm.toml` 的 `press_early`/`hold_extra`/`speed`；播放中 `+/-` 调速、`q` 停 |
 | `dharm --install-completion` | 安装 shell 自动补全 |
 | `dharm midi2txt FILE.mid` | MIDI → txt 草稿 |
 | `dharm preview` | 浏览器听谱预览（不连手机） |
@@ -111,6 +136,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 - `scores/` — 默认乐谱（童话、大悲咒、冲锋号、Lemon、我愿意、千与千寻、歌唱祖国、在希望的田野上、贝加尔湖畔、蓝调小品等）
 - `preview/` — PC 端 HTML 听谱预览
 - `profiles/` — 标定结果（本机坐标，默认不提交）
+- `dharm.toml` — 默认 `profile` / `press_early` / `hold_extra` / `speed` / `countdown`
 
 ## 限制
 

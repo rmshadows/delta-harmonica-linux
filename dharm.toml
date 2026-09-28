@@ -1,0 +1,21 @@
+# dharm 默认配置（仓库根目录；也可用环境变量 DHARM_CONFIG 指定路径）
+# 命令行参数会覆盖这里的值。
+
+# 标定 profile 名（profiles/<name>.json）；设了就可以省略 play -p
+profile = "z60u"
+
+# —— 游戏发声延迟补偿（可同时开）——
+# 模式1 press_early：下一音提前多少 ms 按下（上音未完就换指，听感更连）
+press_early = 200
+# 模式2 hold_extra：每个音多按住多少 ms（给游戏时间出声）
+hold_extra = 150
+# 净起音间隔 ≈ 谱面时值 + hold_extra - press_early
+
+# 开奏倒计时秒数
+countdown = 1
+
+# 初始播放倍速（播放中可用 +/- 或 ]/[ 实时调）
+speed = 1.0
+
+# 多设备时指定 adb serial（一般不用）
+# serial = "xxxxxxxx"
