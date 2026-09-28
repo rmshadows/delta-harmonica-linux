@@ -24,6 +24,11 @@ from delta_harmonica.adb_util import (
 )
 from delta_harmonica.calibrate import CalibrateError, run_calibrate, run_calibrate_test
 from delta_harmonica.config import load_config
+from delta_harmonica.transpose import (
+    analyze_range,
+    plan_label,
+    suggest_transpose,
+)
 from delta_harmonica.midi_convert import convert_midi
 from delta_harmonica.paths import (
     profiles_dir,
@@ -307,9 +312,23 @@ def play_cmd(
     speed: Optional[float] = typer.Option(
         None,
         "--speed",
-        help="Initial playback speed multiplier (default: dharm.toml; live +/- during play)",
+        help="Initial speed (score speed: overrides dharm.toml; [/] live, s/end writes the score)",
         min=0.25,
         max=3.0,
+    ),
+    transpose: Optional[int] = typer.Option(
+        None,
+        "--transpose",
+        "-T",
+        help="Pitch shift in semitones (default: score meta; C→D=+2; "
+        "omit to auto-fix if out of range)",
+        min=-24,
+        max=24,
+    ),
+    no_auto_transpose: bool = typer.Option(
+        False,
+        "--no-auto-transpose",
+        help="Do not auto-suggest transpose when score exceeds UI range",
     ),
     ask: bool = typer.Option(
         False, "--ask", help="Ask for confirmation before playing"
@@ -326,6 +345,7 @@ def play_cmd(
       dharm play -p z60u beijiaer
       dharm -p z60u play scores/beijiaer.txt
       dharm play beijiaer
+      dharm play -T 2 dujuan   # C→D
     """
     cfg = load_config()
     global_profile = (ctx.obj or {}).get("profile") if ctx.obj else None
@@ -347,6 +367,30 @@ def play_cmd(
     except (FileNotFoundError, ScoreParseError) as exc:
         _die(str(exc))
 
+    # 延迟补偿始终用 dharm.toml（或 -E/-H），不用乐谱里的同名字段。
+    if speed is None and parsed.speed is not None:
+        spd = parsed.speed
+
+    # —— 音域 / 移调（默认写入乐谱，不用 dharm.toml）——
+    if transpose is not None:
+        tr = transpose
+    elif parsed.transpose is not None:
+        tr = parsed.transpose
+        typer.echo(f"transpose {tr:+d} ({plan_label(tr)}) from score")
+    else:
+        tr = 0
+        rep = analyze_range(parsed)
+        if not rep.ok and not no_auto_transpose:
+            plan = suggest_transpose(parsed)
+            if plan.semitones != 0:
+                typer.secho(
+                    f"score span [{rep.lo},{rep.hi}] has "
+                    f"{len(set(rep.out_of_range))} out-of-range pitch(es); "
+                    f"auto transpose {plan.semitones:+d} ({plan.label})",
+                    fg=typer.colors.YELLOW,
+                )
+                tr = plan.semitones
+
     try:
         prof_path = resolve_profile_path(profile_name)
         prof = load_profile(prof_path)
@@ -356,8 +400,8 @@ def play_cmd(
     if dry_run:
         typer.echo(format_timeline(parsed))
         typer.echo(
-            f"# hold_extra={hold}ms press_early={early}ms speed=×{spd}"
-            " (applied on real play)"
+            f"# hold_extra={hold}ms press_early={early}ms speed=×{spd} "
+            f"transpose={tr:+d} (applied on real play)"
         )
         return
 
@@ -377,7 +421,7 @@ def play_cmd(
     typer.echo(
         f"Score: {parsed.title} ({score_path.name})  Profile: {prof.name}\n"
         f"hold_extra={hold}ms  press_early={early}ms  speed=×{spd}  "
-        f"display {dw}x{dh}"
+        f"transpose={tr:+d} ({plan_label(tr)})  display {dw}x{dh}"
     )
     if ask and not typer.confirm("Continue?"):
         raise typer.Exit(0)
@@ -392,6 +436,8 @@ def play_cmd(
             hold_extra_ms=hold,
             press_early_ms=early,
             speed=spd,
+            transpose=tr,
+            score_path=score_path,
         )
         player.play(parsed, countdown=count, verbose=True)
     except AdbError as exc:

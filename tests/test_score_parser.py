@@ -121,3 +121,32 @@ def test_tonghua_file_parses():
     dbl = [e for e in score.events if isinstance(e, PlayNote) and e.octaves == 2]
     assert dbl, "tonghua should contain ## notes"
     assert all(n.pitch == PitchKey.N1 for n in dbl)
+
+
+def test_update_playback_inserts_before_sharp_notes(tmp_path):
+    from pathlib import Path
+
+    from delta_harmonica.score_parser import update_score_playback
+
+    p = Path(tmp_path) / "s.txt"
+    p.write_text("# c\ntitle: t\nbpm: 120\n#3/4 1/4\n", encoding="utf-8")
+    update_score_playback(p, speed=0.9, transpose=2)
+    text = p.read_text(encoding="utf-8")
+    assert text.index("speed:") < text.index("#3/4")
+    assert "transpose: 2" in text
+    again = parse_score_text(text)
+    assert again.speed == 0.9
+    assert again.transpose == 2
+    assert [e for e in again.events if isinstance(e, PlayNote)][0].pitch == PitchKey.N3
+
+
+def test_diatonic_arrows_follow_cdefgab():
+    from delta_harmonica.transpose import diatonic_key_label, nudge_diatonic_key
+
+    assert nudge_diatonic_key(0, 1) == 2  # C → D
+    assert nudge_diatonic_key(2, 1) == 4  # D → E
+    assert nudge_diatonic_key(11, 1) == 12  # B → C (+octave)
+    assert nudge_diatonic_key(0, -1) == -1  # C → B (down an octave)
+    assert diatonic_key_label(2) == "D"
+    assert "八度" in diatonic_key_label(14)  # ↑1 D
+

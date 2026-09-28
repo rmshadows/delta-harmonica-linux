@@ -109,8 +109,8 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 见 [`scores/example.txt`](scores/example.txt)。要点：
 
 - 元数据：`title` / `bpm` 或 `ms_beat`
-- 音高：`1`–`7`，同排高音 `1'`
-- 修饰（跟游戏一致）：`s1` 半音(+1)、`#1` 升调(+八度)、`b1` 降调(-八度)；`##1` 再高八度（相对自然 1 为 +2 八度，手机上等同升调+`1'`）；自然音为默认
+- 音高：`1`–`7`，同排高音 `1'`（界面第 8 键 `1̇`；`#1` 播放时也会打到这一键）
+- 修饰（跟游戏一致）：`s1` 半音(+1)、`#2`…`#7` 升调(+八度)、`b1` 降调(-八度)；`##1` = 升调+`1'`（再高八度）；自然音为默认
 - 时值：`/4` `/8` `/16` `/2`（默认 `/4`）
 - 休止：`0/4` 或 `-`
 - `0` / `0/8` / `0:350` 休止（`0:毫秒`=精确停顿）；`rest_scale:` 整体缩放休止
@@ -126,7 +126,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 | `dharm calibrate -p NAME` | 在 scrcpy 窗口上依次点击标定 |
 | `dharm calibrate -p NAME --test` | 按标定依次触达各键（听音确认） |
 | `dharm list` | 列出 `scores/` 下乐谱 |
-| `dharm play SCORE [-p NAME]` | 练习辅助；`dharm.toml` 的 `press_early`/`hold_extra`/`speed`；播放中 `+/-` 调速、`q` 停 |
+| `dharm play SCORE [-p NAME]` | 练习辅助；`[/]` 调速、`←→` 调（CDEFGAB）、`↑↓` ±八度、`z/x` early±50、`c/v` hold±50、`s` 写入乐谱 |
 | `dharm --install-completion` | 安装 shell 自动补全 |
 | `dharm midi2txt FILE.mid` | MIDI → txt 草稿 |
 | `dharm preview` | 浏览器听谱预览（不连手机） |
@@ -136,7 +136,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 - `scores/` — 默认乐谱（童话、大悲咒、冲锋号、Lemon、我愿意、千与千寻、歌唱祖国、在希望的田野上、贝加尔湖畔、蓝调小品等）
 - `preview/` — PC 端 HTML 听谱预览
 - `profiles/` — 标定结果（本机坐标，默认不提交）
-- `dharm.toml` — 默认 `profile` / `press_early` / `hold_extra` / `speed` / `countdown`
+- `dharm.toml` — 默认 `profile` / `press_early` / `hold_extra` / `countdown`（倍速和调写在各乐谱 `speed:` / `transpose:`）
 
 ## 限制
 

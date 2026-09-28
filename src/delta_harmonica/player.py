@@ -6,7 +6,9 @@ import termios
 import tty
 import threading
 import time
+from pathlib import Path
 
+from delta_harmonica.config import clamp_transpose, save_latency
 from delta_harmonica.models import (
     MODIFIER_TO_UI,
     PITCH_TO_UI,
@@ -20,7 +22,29 @@ from delta_harmonica.models import (
     SetModifier,
     SetRegister,
 )
+from delta_harmonica.score_parser import update_score_playback
 from delta_harmonica.touch import TouchController
+from delta_harmonica.transpose import (
+    diatonic_key_label,
+    nudge_diatonic_key,
+    transpose_note,
+)
+
+# High-contrast ANSI so live changes stay visible between note lines.
+_C = {
+    "speed": "\033[1;30;46m",  # black on cyan
+    "key": "\033[1;97;45m",  # white on magenta
+    "octave": "\033[1;97;44m",  # white on blue
+    "early": "\033[1;30;42m",  # black on green
+    "hold": "\033[1;30;43m",  # black on yellow
+    "save": "\033[1;30;102m",  # black on bright green
+    "dim": "\033[2m",
+    "reset": "\033[0m",
+}
+
+
+def _cprint(kind: str, msg: str) -> None:
+    print(f"{_C.get(kind, '')}{msg}{_C['reset']}", flush=True)
 
 
 class Player:
@@ -35,6 +59,8 @@ class Player:
         hold_extra_ms: int = 0,
         press_early_ms: int = 0,
         speed: float = 1.0,
+        transpose: int = 0,
+        score_path: Path | None = None,
         assume_modifier: Modifier = Modifier.NATURAL,
         display_width: int | None = None,
         display_height: int | None = None,
@@ -42,15 +68,17 @@ class Player:
         self.profile = profile
         self.touch = touch
         self.modifier_tap_ms = modifier_tap_ms
-        # Mode 2: hold each key longer so the game has time to sound.
         self.hold_extra_ms = max(0, int(hold_extra_ms))
-        # Mode 1: start the next key this many ms early (legato / cover latency).
         self.press_early_ms = max(0, int(press_early_ms))
         self.speed = max(0.25, min(3.0, float(speed)))
+        self.transpose = clamp_transpose(transpose)
+        self.score_path = Path(score_path) if score_path else None
         self.current_modifier = assume_modifier
         self.display_width = display_width or profile.device_width
         self.display_height = display_height or profile.device_height
         self._stop = False
+        self._saved_score = (self.speed, self.transpose)
+        self._saved_latency = (self.press_early_ms, self.hold_extra_ms)
 
     def _scale_ms(self, ms: int) -> int:
         return max(1, int(round(ms / self.speed)))
@@ -59,7 +87,6 @@ class Player:
         return max(1, int(duration_ms) + self.hold_extra_ms)
 
     def _onset_gap_ms(self, duration_ms: int) -> int:
-        """Wall-clock from this press to the next press."""
         return max(1, int(duration_ms) + self.hold_extra_ms - self.press_early_ms)
 
     def _resolve(self, key: str):
@@ -73,11 +100,6 @@ class Player:
         self.touch.tap(self._resolve(key), hold_ms=hold_ms)
 
     def _press_note(self, key: str, duration_ms: int) -> None:
-        """Press one note honoring hold_extra + press_early (single finger).
-
-        interval = duration + hold_extra - press_early  (next onset)
-        hold     = duration + hold_extra
-        """
         from delta_harmonica.touch import TouchBackend
 
         hold_ms = self._scale_ms(self._note_hold_ms(duration_ms))
@@ -90,7 +112,6 @@ class Player:
             self.touch.sleep_ms(down_ms)
             self.touch.up(pt)
         else:
-            # swipe / dry-run: atomic press for the down portion
             self.touch.press(pt, down_ms)
         if idle_ms:
             self.touch.sleep_ms(idle_ms)
@@ -98,10 +119,26 @@ class Player:
     def _ensure_modifier(self, modifier: Modifier) -> None:
         if modifier == self.current_modifier:
             return
+        if (
+            self.current_modifier == Modifier.SEMITONE
+            and modifier != Modifier.NATURAL
+        ):
+            self._tap_ui(
+                MODIFIER_TO_UI[Modifier.NATURAL],
+                self._scale_ms(self.modifier_tap_ms),
+            )
+            self.current_modifier = Modifier.NATURAL
+            self.touch.sleep_ms(self._scale_ms(40))
+            if modifier == Modifier.NATURAL:
+                return
         ui = MODIFIER_TO_UI[modifier]
         self._tap_ui(ui, self._scale_ms(self.modifier_tap_ms))
         self.current_modifier = modifier
         self.touch.sleep_ms(self._scale_ms(40))
+
+    def _clear_semitone(self) -> None:
+        if self.current_modifier == Modifier.SEMITONE:
+            self._ensure_modifier(Modifier.NATURAL)
 
     @staticmethod
     def _phone_keys(note: PlayNote) -> tuple[Modifier, str]:
@@ -109,6 +146,14 @@ class Player:
             return Modifier.SEMITONE, PITCH_TO_UI[note.pitch]
         if note.octaves >= 2 and note.pitch == PitchKey.N1:
             return Modifier.SHARP, PITCH_TO_UI[PitchKey.N1P]
+        if note.octaves >= 1 and note.pitch == PitchKey.N1P:
+            return Modifier.SHARP, PITCH_TO_UI[PitchKey.N1P]
+        if (
+            note.modifier == Modifier.SHARP
+            and note.octaves == 1
+            and note.pitch == PitchKey.N1
+        ):
+            return Modifier.NATURAL, PITCH_TO_UI[PitchKey.N1P]
         if note.octaves <= -2 and note.pitch == PitchKey.N1P:
             return Modifier.FLAT, PITCH_TO_UI[PitchKey.N1]
         return note.modifier, PITCH_TO_UI[note.pitch]
@@ -123,8 +168,48 @@ class Player:
             return "b" * (-note.octaves)
         return ""
 
-    def _speed_listener(self) -> None:
-        """Background: +/- or [] change speed; q/Esc stop. Needs a TTY."""
+    def _persist_score(self, *, reason: str) -> None:
+        if self.score_path is None:
+            _cprint("save", f"\n  ▶ 无乐谱路径，无法保存 ({reason})")
+            return
+        try:
+            path = update_score_playback(
+                self.score_path,
+                speed=self.speed,
+                transpose=self.transpose,
+            )
+        except OSError as exc:
+            _cprint("save", f"\n  ▶ 写入乐谱失败: {exc}")
+            return
+        self._saved_score = (self.speed, self.transpose)
+        self._flash(
+            "save",
+            f"已写入 {path.name} ({reason})",
+        )
+
+    def _persist_latency(self, *, reason: str) -> None:
+        try:
+            path = save_latency(self.press_early_ms, self.hold_extra_ms)
+        except OSError as exc:
+            _cprint("save", f"\n  ▶ 写入配置失败: {exc}")
+            return
+        self._saved_latency = (self.press_early_ms, self.hold_extra_ms)
+        self._flash("save", f"已写入 {path.name} early/hold ({reason})")
+
+    def _flash(self, kind: str, headline: str) -> None:
+        """One high-contrast line plus the current playback numbers."""
+        _cprint(kind, f"\n  {headline}")
+        print(
+            f"  {_C['speed']} ×{self.speed:.2f} {_C['reset']}"
+            f" {_C['key']} {diatonic_key_label(self.transpose)} {_C['reset']}"
+            f" {_C['octave']} {self.transpose:+d}半音 {_C['reset']}"
+            f" {_C['early']} early {self.press_early_ms} {_C['reset']}"
+            f" {_C['hold']} hold {self.hold_extra_ms} {_C['reset']}",
+            flush=True,
+        )
+
+    def _input_listener(self) -> None:
+        """TTY hotkeys. Arrow keys arrive as ESC [ A/B/C/D."""
         if not sys.stdin.isatty():
             return
         fd = sys.stdin.fileno()
@@ -136,15 +221,56 @@ class Player:
                 if not r:
                     continue
                 ch = sys.stdin.read(1)
-                if ch in ("+", "=", "]"):
+                if ch == "\x1b":
+                    # Escape sequence or bare Esc
+                    if select.select([sys.stdin], [], [], 0.04)[0]:
+                        ch2 = sys.stdin.read(1)
+                        if ch2 == "[" and select.select([sys.stdin], [], [], 0.04)[0]:
+                            ch3 = sys.stdin.read(1)
+                            if ch3 == "A":  # up → +octave
+                                self.transpose = clamp_transpose(self.transpose + 12)
+                                self._flash("octave", "▲ 升八度")
+                            elif ch3 == "B":  # down → −octave
+                                self.transpose = clamp_transpose(self.transpose - 12)
+                                self._flash("octave", "▼ 降八度")
+                            elif ch3 == "C":  # right → next key CDEFGAB
+                                self.transpose = clamp_transpose(
+                                    nudge_diatonic_key(self.transpose, +1)
+                                )
+                                self._flash("key", "→ 升调")
+                            elif ch3 == "D":  # left → prev key
+                                self.transpose = clamp_transpose(
+                                    nudge_diatonic_key(self.transpose, -1)
+                                )
+                                self._flash("key", "← 降调")
+                        # else: ignore other ESC sequences
+                    else:
+                        self._stop = True
+                        _cprint("dim", "\n  ▶ stop")
+                elif ch == "]":
                     self.speed = min(3.0, round(self.speed + 0.05, 2))
-                    print(f"\n  ▶ speed ×{self.speed:.2f}", flush=True)
-                elif ch in ("-", "["):
+                    self._flash("speed", "] 加速")
+                elif ch == "[":
                     self.speed = max(0.25, round(self.speed - 0.05, 2))
-                    print(f"\n  ▶ speed ×{self.speed:.2f}", flush=True)
-                elif ch in ("q", "Q", "\x1b"):
+                    self._flash("speed", "[ 减速")
+                elif ch in ("z", "Z"):
+                    self.press_early_ms = max(0, self.press_early_ms - 50)
+                    self._flash("early", "z press_early −50")
+                elif ch in ("x", "X"):
+                    self.press_early_ms = self.press_early_ms + 50
+                    self._flash("early", "x press_early +50")
+                elif ch in ("c", "C"):
+                    self.hold_extra_ms = max(0, self.hold_extra_ms - 50)
+                    self._flash("hold", "c hold_extra −50")
+                elif ch in ("v", "V"):
+                    self.hold_extra_ms = self.hold_extra_ms + 50
+                    self._flash("hold", "v hold_extra +50")
+                elif ch in ("s", "S"):
+                    self._persist_score(reason="key")
+                    self._persist_latency(reason="key")
+                elif ch in ("q", "Q"):
                     self._stop = True
-                    print("\n  ▶ stop", flush=True)
+                    _cprint("dim", "\n  ▶ stop")
         except Exception:  # noqa: BLE001
             pass
         finally:
@@ -165,26 +291,35 @@ class Player:
                 print(f"starting in {i}…", flush=True)
                 time.sleep(1)
 
+        self._saved_score = (self.speed, self.transpose)
+        self._saved_latency = (self.press_early_ms, self.hold_extra_ms)
+
         if verbose:
-            bits = []
-            if self.hold_extra_ms:
-                bits.append(f"hold_extra={self.hold_extra_ms}ms")
-            if self.press_early_ms:
-                bits.append(f"press_early={self.press_early_ms}ms")
-            bits.append(f"speed=×{self.speed:.2f}")
+            bits = [
+                f"speed=×{self.speed:.2f}",
+                f"调={diatonic_key_label(self.transpose)}({self.transpose:+d})",
+                f"early={self.press_early_ms}",
+                f"hold={self.hold_extra_ms}",
+            ]
             print(
                 f"playing '{score.title}' bpm={score.bpm:.1f} "
                 f"backend={self.touch.backend.value} {' '.join(bits)}",
                 flush=True,
             )
             print(
-                "  keys: +/] faster · -/ [ slower · q stop",
+                f"{_C['dim']}  键: [/] 减速加速  "
+                f"{_C['key']}←→ 降调升调(CDEFGAB){_C['dim']}  "
+                f"{_C['octave']}↑↓ ±八度{_C['dim']}  "
+                f"{_C['early']}z/x early±50{_C['dim']}  "
+                f"{_C['hold']}c/v hold±50{_C['dim']}  "
+                f"{_C['save']}s 写入乐谱{_C['dim']}  q 停"
+                f"{_C['reset']}",
                 flush=True,
             )
 
         self._stop = False
         aborted = False
-        listener = threading.Thread(target=self._speed_listener, daemon=True)
+        listener = threading.Thread(target=self._input_listener, daemon=True)
         listener.start()
 
         try:
@@ -192,22 +327,23 @@ class Player:
                 if self._stop:
                     aborted = True
                     break
-                if isinstance(ev, SetRegister):
+                if isinstance(ev, (SetRegister, SetModifier)):
                     continue
-                if isinstance(ev, SetModifier):
-                    self._ensure_modifier(ev.modifier)
-                elif isinstance(ev, PlayNote):
-                    mod, ui = self._phone_keys(ev)
+                if isinstance(ev, PlayNote):
+                    note = transpose_note(ev, self.transpose) or ev
+                    mod, ui = self._phone_keys(note)
                     self._ensure_modifier(mod)
-                    hold = self._scale_ms(self._note_hold_ms(ev.duration_ms))
-                    gap = self._scale_ms(self._onset_gap_ms(ev.duration_ms))
+                    hold = self._scale_ms(self._note_hold_ms(note.duration_ms))
+                    gap = self._scale_ms(self._onset_gap_ms(note.duration_ms))
                     if verbose:
                         print(
-                            f"  {self._acc_label(ev)}{ev.pitch.value} "
+                            f"  {self._acc_label(note)}{note.pitch.value} "
                             f"hold={hold}ms gap={gap}ms ×{self.speed:.2f}",
                             flush=True,
                         )
-                    self._press_note(ui, ev.duration_ms)
+                    self._press_note(ui, note.duration_ms)
+                    if mod == Modifier.SEMITONE:
+                        self._clear_semitone()
                 elif isinstance(ev, Rest):
                     ms = max(1, int(round(ev.duration_ms * score.rest_scale)))
                     ms = self._scale_ms(ms)
@@ -221,6 +357,15 @@ class Player:
                     print(f"  unknown event {ev!r}", file=sys.stderr)
         finally:
             self._stop = True
+            try:
+                self._clear_semitone()
+            except Exception:  # noqa: BLE001
+                pass
+
+        if (self.speed, self.transpose) != self._saved_score:
+            self._persist_score(reason="end" if not aborted else "stop")
+        if (self.press_early_ms, self.hold_extra_ms) != self._saved_latency:
+            self._persist_latency(reason="end" if not aborted else "stop")
 
         if verbose:
             print("stopped." if aborted else "done.", flush=True)
@@ -231,13 +376,11 @@ def format_timeline(score: Score) -> str:
         f"# {score.title}  bpm={score.bpm:.1f}  ms_beat={score.ms_beat:.1f}",
     ]
     t = 0
-    mod = Modifier.NATURAL
     for ev in score.events:
         if isinstance(ev, SetRegister):
             continue
         if isinstance(ev, SetModifier):
-            mod = ev.modifier
-            lines.append(f"{t:6d}ms  SET modifier={mod.value}")
+            lines.append(f"{t:6d}ms  SET modifier={ev.modifier.value}")
         elif isinstance(ev, PlayNote):
             acc = Player._acc_label(ev) or ev.modifier.value
             lines.append(

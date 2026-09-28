@@ -59,7 +59,7 @@ UI_KEY_LABELS: dict[str, str] = {
     "note_5": "音符 5",
     "note_6": "音符 6",
     "note_7": "音符 7",
-    "note_1p": "音符 1'（高音 1）",
+    "note_1p": "音符 1' / 1̇（第 8 键，同排高音 do）",
 }
 
 PITCH_TO_UI: dict[PitchKey, str] = {
@@ -221,3 +221,8 @@ class Score:
     source: str | None = None
     lyrics: list[str] = field(default_factory=list)
     rest_scale: float = 1.0
+    # Optional per-score playback prefs (written back into the .txt)
+    speed: float | None = None
+    transpose: int | None = None
+    press_early: int | None = None
+    hold_extra: int | None = None

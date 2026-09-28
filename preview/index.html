@@ -672,10 +672,14 @@
       return "";
     }
 
-    /** Phone UI: ##1 → 升调 + 1' */
+    /** Phone UI: 12345671̇ — #1 → 自然+1'；##1 → 升调+1' */
     function phonePitch(pitch, mod, octaves) {
       if (mod === "semitone") return { pitch, mod };
       if (octaves >= 2 && pitch === "1") return { pitch: "1'", mod: "sharp" };
+      if (octaves >= 1 && pitch === "1'") return { pitch: "1'", mod: "sharp" };
+      if (mod === "sharp" && octaves === 1 && pitch === "1") {
+        return { pitch: "1'", mod: "natural" };
+      }
       if (octaves <= -2 && pitch === "1'") return { pitch: "1", mod: "flat" };
       return { pitch, mod };
     }

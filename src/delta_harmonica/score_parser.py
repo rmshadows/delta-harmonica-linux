@@ -16,7 +16,8 @@ from delta_harmonica.models import (
 )
 
 _META_RE = re.compile(
-    r"^(title|bpm|ms_beat|register|rest_scale)\s*:\s*(.+?)\s*$",
+    r"^(title|bpm|ms_beat|register|rest_scale|speed|transpose|press_early|hold_extra)"
+    r"\s*:\s*(.+?)\s*$",
     re.IGNORECASE,
 )
 
@@ -239,6 +240,10 @@ def parse_score_text(text: str, *, source: str | None = None) -> Score:
     ms_beat: float | None = None
     register = 2
     rest_scale = 1.0
+    speed: float | None = None
+    transpose: int | None = None
+    press_early: int | None = None
+    hold_extra: int | None = None
     body_tokens: list[str] = []
     lyrics: list[str] = []
 
@@ -276,6 +281,14 @@ def parse_score_text(text: str, *, source: str | None = None) -> Score:
                     rest_scale = float(val)
                     if rest_scale <= 0:
                         raise ScoreParseError("rest_scale must be positive")
+                elif key == "speed":
+                    speed = max(0.25, min(3.0, float(val)))
+                elif key == "transpose":
+                    transpose = max(-24, min(24, int(val)))
+                elif key == "press_early":
+                    press_early = max(0, int(val))
+                elif key == "hold_extra":
+                    hold_extra = max(0, int(val))
             except ScoreParseError:
                 raise
             except ValueError as exc:
@@ -334,9 +347,76 @@ def parse_score_text(text: str, *, source: str | None = None) -> Score:
         source=source,
         lyrics=lyrics,
         rest_scale=rest_scale,
+        speed=speed,
+        transpose=transpose,
+        press_early=press_early,
+        hold_extra=hold_extra,
     )
 
 
 def parse_score_file(path: Path) -> Score:
     text = path.read_text(encoding="utf-8")
     return parse_score_text(text, source=str(path))
+
+
+_PLAYBACK_META_ORDER = ("speed", "transpose", "press_early", "hold_extra")
+_PLAYBACK_LINE = {
+    "speed": re.compile(r"(?m)^(speed\s*:\s*)[^\n#]+(.*)$"),
+    "transpose": re.compile(r"(?m)^(transpose\s*:\s*)[^\n#]+(.*)$"),
+    "press_early": re.compile(r"(?m)^(press_early\s*:\s*)[^\n#]+(.*)$"),
+    "hold_extra": re.compile(r"(?m)^(hold_extra\s*:\s*)[^\n#]+(.*)$"),
+}
+
+
+def update_score_playback(
+    path: Path,
+    *,
+    speed: float | None = None,
+    transpose: int | None = None,
+    press_early: int | None = None,
+    hold_extra: int | None = None,
+) -> Path:
+    """Write playback prefs into the score ``.txt`` (not dharm.toml)."""
+    values: dict[str, str] = {}
+    if speed is not None:
+        values["speed"] = f"{max(0.25, min(3.0, float(speed))):.2f}"
+    if transpose is not None:
+        values["transpose"] = str(max(-24, min(24, int(transpose))))
+    if press_early is not None:
+        values["press_early"] = str(max(0, int(press_early)))
+    if hold_extra is not None:
+        values["hold_extra"] = str(max(0, int(hold_extra)))
+    if not values:
+        return path
+
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    lines_to_append: list[str] = []
+    for key in _PLAYBACK_META_ORDER:
+        if key not in values:
+            continue
+        pat = _PLAYBACK_LINE[key]
+        if pat.search(text):
+            text = pat.sub(rf"\g<1>{values[key]}\2", text, count=1)
+        else:
+            lines_to_append.append(f"{key}: {values[key]}")
+
+    if lines_to_append:
+        # Insert after header comments / title / bpm. "#3/4" is a note, not a comment.
+        insert_at = 0
+        raw_lines = text.splitlines(keepends=True)
+        if not raw_lines:
+            text = "\n".join(lines_to_append) + "\n"
+        else:
+            for i, ln in enumerate(raw_lines):
+                s = ln.strip()
+                if not s or re.match(r"^#(\s|$)", s) or _META_RE.match(s):
+                    insert_at = i + 1
+                    continue
+                break
+            block = "".join(f"{x}\n" for x in lines_to_append)
+            raw_lines.insert(insert_at, block)
+            text = "".join(raw_lines)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
