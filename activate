@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# 当前终端会话入口：PATH + Tab 补全。
+# 用法（每个新终端进项目后一次，不必写 ~/.zshrc）:
+#   source ./activate
+
+_dharm_usage() {
+  echo "用法:  source ./activate" >&2
+  echo "  （每个新终端进项目后跑一次；不要写进 ~/.zshrc）" >&2
+}
+
+# 必须 source；直接 ./activate 只提示用法
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  if [[ "${ZSH_EVAL_CONTEXT:-}" != *:file* ]]; then
+    _dharm_usage
+    return 1 2>/dev/null || exit 1
+  fi
+  _DHARM_ROOT="$(cd "$(dirname "${(%):-%x}")" && pwd)"
+elif [[ -n "${BASH_VERSION:-}" ]]; then
+  (return 0 2>/dev/null) || {
+    _dharm_usage
+    exit 1
+  }
+  _DHARM_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+else
+  _dharm_usage
+  exit 1
+fi
+
+_DHARM_VENV="${_DHARM_ROOT}/.venv"
+_DHARM_BIN="${_DHARM_VENV}/bin"
+
+if [[ ! -x "${_DHARM_BIN}/dharm" ]]; then
+  echo "[dharm] 尚未安装，先跑一次:  ${_DHARM_ROOT}/dharm doctor" >&2
+else
+  case ":${PATH}:" in
+    *":${_DHARM_BIN}:"*) ;;
+    *) export PATH="${_DHARM_BIN}:${PATH}" ;;
+  esac
+fi
+
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  if ! typeset -f compdef >/dev/null 2>&1; then
+    autoload -Uz compinit
+    compinit -u
+  fi
+  # shellcheck disable=SC1091
+  source "${_DHARM_ROOT}/completions/dharm.zsh"
+  echo "[dharm] 已启用补全。试:  dharm <Tab>  或  ./dharm <Tab>"
+else
+  if [[ -x "${_DHARM_BIN}/dharm" ]]; then
+    eval "$("${_DHARM_BIN}/dharm" --show-completion bash 2>/dev/null)" || true
+  fi
+  echo "[dharm] PATH 已就绪（bash）。补全体验推荐 zsh + source ./activate。"
+fi
+
+unset _DHARM_ROOT _DHARM_VENV _DHARM_BIN

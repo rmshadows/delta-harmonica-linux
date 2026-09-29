@@ -25,6 +25,13 @@ cd delta-harmonica-linux
 
 第一次运行会自动创建 `.venv` 并 `pip install -e .`；之后直接 `./dharm …` 即可。
 
+若需要 **Tab 自动补全**（命令 / 乐谱名 / profile），每个新终端进项目后手动 source 一次（不必写进 `~/.zshrc`）：
+
+```bash
+source ./activate
+# 然后: dharm <Tab>  /  ./dharm calibrate <Tab>  /  dharm play <Tab>
+```
+
 若你更习惯传统方式：
 
 ```bash
@@ -42,8 +49,8 @@ dharm --help
 
 ```bash
 dharm doctor
-dharm calibrate --profile myphone
-dharm calibrate --profile myphone --test
+dharm calibrate myphone          # 或: dharm calibrate -p myphone
+dharm calibrate myphone --test
 ```
 
 标定存的是**手机屏幕坐标**（adb 触摸坐标），不是 scrcpy 窗口像素。窗口最大化/缩小/移动都不用重标定；只有分辨率、横竖屏或游戏 UI 布局变了才需要。
@@ -68,19 +75,7 @@ countdown = 1
 
 ```bash
 dharm play beijiaer
-# 播放中：+ / ] 加速，- / [ 减速，q 停止
-```
-
-Shell 自动补全（命令 / 乐谱名 / profile）：
-
-```bash
-# 推荐：加载仓库自带的补全（支持 ./dharm 与 dharm）
-# zsh — 写入 ~/.zshrc 一次即可：
-echo "source $(pwd)/completions/dharm.zsh" >> ~/.zshrc
-source ~/.zshrc
-
-# 或用 Typer 自带安装（只注册命令名 dharm，需 PATH 含 .venv/bin）
-./dharm --install-completion
+# 播放中：+ / ] 加速，- / [ 减速；←→↑↓ 移调；p 暂停/继续；s 写入本乐谱；q 停止
 ```
 
 用法：乐谱放在**最后**：
@@ -123,10 +118,10 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 | 命令 | 说明 |
 |------|------|
 | `dharm doctor` | 检查 adb / scrcpy / 设备 |
-| `dharm calibrate -p NAME` | 在 scrcpy 窗口上依次点击标定 |
-| `dharm calibrate -p NAME --test` | 按标定依次触达各键（听音确认） |
+| `dharm calibrate NAME` | 在 scrcpy 窗口上依次点击标定（`-p NAME` 亦可） |
+| `dharm calibrate NAME --test` | 按标定依次触达各键（听音确认） |
 | `dharm list` | 列出 `scores/` 下乐谱 |
-| `dharm play SCORE [-p NAME]` | 练习辅助；`[/]` 调速、`←→` 调（CDEFGAB）、`↑↓` ±八度、`z/x` early±50、`c/v` hold±50、`s` 写入乐谱 |
+| `dharm play SCORE [-p NAME]` | 练习辅助；`[/]`/`+/-` 调速、`←→` 调、`↑↓` ±八度、`p` 暂停、`z/x` early、`c/v` hold、`s` 写入该乐谱、`q` 停 |
 | `dharm --install-completion` | 安装 shell 自动补全 |
 | `dharm midi2txt FILE.mid` | MIDI → txt 草稿 |
 | `dharm preview` | 浏览器听谱预览（不连手机） |
@@ -135,7 +130,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 
 - `scores/` — 默认乐谱（童话、大悲咒、冲锋号、Lemon、我愿意、千与千寻、歌唱祖国、在希望的田野上、贝加尔湖畔、蓝调小品等）
 - `preview/` — PC 端 HTML 听谱预览
-- `profiles/` — 标定结果（本机坐标，默认不提交）
+- `profiles/` — 标定结果（设备像素坐标；可按机型共享，无隐私信息）
 - `dharm.toml` — 默认 `profile` / `press_early` / `hold_extra` / `countdown`（倍速和调写在各乐谱 `speed:` / `transpose:`）
 
 ## 限制

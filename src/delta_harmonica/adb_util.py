@@ -105,11 +105,43 @@ def get_wm_size(serial: str | None = None) -> tuple[int, int]:
     return int(w), int(h)
 
 
+def _parse_override_real_sizes(text: str) -> list[tuple[str, int, int]]:
+    """Return (name, w, h) for each mOverrideDisplayInfo real size."""
+    out: list[tuple[str, int, int]] = []
+    for m in re.finditer(
+        r'mOverrideDisplayInfo=DisplayInfo\{"([^"]*)".*?\breal\s+(\d+)\s+x\s+(\d+)',
+        text,
+        re.DOTALL,
+    ):
+        name, w_s, h_s = m.group(1), m.group(2), m.group(3)
+        w, h = int(w_s), int(h_s)
+        if w >= 200 and h >= 200:
+            out.append((name, w, h))
+    return out
+
+
+def get_scrcpy_virtual_size(serial: str | None = None) -> tuple[int, int] | None:
+    """Encoder frame size from the scrcpy virtual display (matches mirrored video)."""
+    try:
+        proc = run_adb(
+            ["shell", "dumpsys", "display"],
+            serial=serial,
+            check=False,
+            timeout=15,
+        )
+    except AdbError:
+        return None
+    for name, w, h in _parse_override_real_sizes(proc.stdout or ""):
+        if name.lower().startswith("scrcpy"):
+            return w, h
+    return None
+
+
 def get_display_size(serial: str | None = None) -> tuple[int, int]:
     """Current logical display size used by ``input tap`` (respects rotation).
 
     ``wm size`` often stays at the physical portrait size while the device is
-    landscape (games / harmonica UI). Scrcpy then shows a wide frame; letterbox
+    landscape (game / harmonica UI). Scrcpy then shows a wide frame; letterbox
     math must use the *current* size or clicks land in fake pillarbox gutters.
     """
     # 1) Active input viewport (best: matches touch coordinate space)
@@ -121,6 +153,15 @@ def get_display_size(serial: str | None = None) -> tuple[int, int]:
             timeout=15,
         )
         text = proc.stdout or ""
+        # Prefer deviceSize= when present (explicit WxH)
+        for m in re.finditer(
+            r"Viewport INTERNAL:.*?deviceSize=\[(\d+),\s*(\d+)\].*?isActive=\[([01])\]",
+            text,
+            re.DOTALL,
+        ):
+            w, h, active = int(m.group(1)), int(m.group(2)), m.group(3)
+            if active == "1" and w >= 200 and h >= 200:
+                return w, h
         for m in re.finditer(
             r"Viewport INTERNAL:.*?logicalFrame="
             r"\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]"
@@ -134,7 +175,14 @@ def get_display_size(serial: str | None = None) -> tuple[int, int]:
             w, h = int(x2) - int(x1), int(y2) - int(y1)
             if w >= 200 and h >= 200:
                 return w, h
-        # any INTERNAL viewport if active flag missing / format differs
+        for m in re.finditer(
+            r"Viewport INTERNAL:.*?deviceSize=\[(\d+),\s*(\d+)\]",
+            text,
+            re.DOTALL,
+        ):
+            w, h = int(m.group(1)), int(m.group(2))
+            if w >= 200 and h >= 200:
+                return w, h
         for m in re.finditer(
             r"Viewport INTERNAL:.*?logicalFrame="
             r"\[(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\]",
@@ -148,7 +196,7 @@ def get_display_size(serial: str | None = None) -> tuple[int, int]:
     except AdbError:
         pass
 
-    # 2) dumpsys display override "real W x H" for built-in display
+    # 2) dumpsys display override "real W x H" for built-in (skip scrcpy virtual)
     try:
         proc = run_adb(
             ["shell", "dumpsys", "display"],
@@ -157,16 +205,10 @@ def get_display_size(serial: str | None = None) -> tuple[int, int]:
             timeout=15,
         )
         text = proc.stdout or ""
-        m = re.search(
-            r"mOverrideDisplayInfo=DisplayInfo\{"
-            r'"[^"]*".*?\breal\s+(\d+)\s+x\s+(\d+)',
-            text,
-            re.DOTALL,
-        )
-        if m:
-            w, h = int(m.group(1)), int(m.group(2))
-            if w >= 200 and h >= 200:
-                return w, h
+        for name, w, h in _parse_override_real_sizes(text):
+            if name.lower().startswith("scrcpy"):
+                continue
+            return w, h
     except AdbError:
         pass
 
@@ -179,13 +221,44 @@ def get_display_size(serial: str | None = None) -> tuple[int, int]:
             check=False,
             timeout=15,
         )
-        # First built-in display orientation 1 or 3 → landscape relative to physical
         if re.search(r"\bmCurrentOrientation=[13]\b", proc.stdout or ""):
             if w < h:
                 return h, w
     except AdbError:
         pass
     return w, h
+
+
+def resolve_display_size_for_window(
+    serial: str | None,
+    window_width: int,
+    window_height: int,
+) -> tuple[int, int]:
+    """Pick touch/video size that matches the scrcpy window (fix wrong rotation).
+
+    If ``get_display_size`` briefly returns physical portrait while scrcpy is
+    mirroring landscape, letterbox math invents a narrow pillarbox and every
+    click looks \"outside video\". Prefer the scrcpy virtual display size when
+    present (that is the mirrored frame). Otherwise pick the orientation that
+    fills the window better among reported size and its swap.
+    """
+    dw, dh = get_display_size(serial)
+    sc = get_scrcpy_virtual_size(serial)
+    # Scrcpy encoder size is ground truth for what is drawn in the window.
+    if sc is not None:
+        return sc
+
+    candidates: list[tuple[int, int]] = [(dw, dh)]
+    if (dh, dw) != (dw, dh):
+        candidates.append((dh, dw))
+
+    def fill_score(size: tuple[int, int]) -> float:
+        w, h = size
+        if w <= 0 or h <= 0 or window_width <= 0 or window_height <= 0:
+            return 0.0
+        return min(window_width / w, window_height / h)
+
+    return max(candidates, key=fill_score)
 
 
 def shell(

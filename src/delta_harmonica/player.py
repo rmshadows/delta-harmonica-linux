@@ -77,6 +77,7 @@ class Player:
         self.display_width = display_width or profile.device_width
         self.display_height = display_height or profile.device_height
         self._stop = False
+        self._paused = False
         self._saved_score = (self.speed, self.transpose)
         self._saved_latency = (self.press_early_ms, self.hold_extra_ms)
 
@@ -109,22 +110,44 @@ class Player:
         idle_ms = max(0, gap_ms - hold_ms)
         if self.touch.backend == TouchBackend.MOTIONEVENT:
             self.touch.down(pt)
+            # Hold itself is not pause-aware (finger must come up);
+            # pause applies between notes / during rests.
             self.touch.sleep_ms(down_ms)
             self.touch.up(pt)
         else:
             self.touch.press(pt, down_ms)
         if idle_ms:
-            self.touch.sleep_ms(idle_ms)
+            self._sleep_ms(idle_ms)
+
+    def _wait_while_paused(self) -> None:
+        """Block while paused; returns immediately if stopped."""
+        shown = False
+        while self._paused and not self._stop:
+            if not shown:
+                _cprint("dim", "\n  ▶ 已暂停 — 再按 p 继续，q 停止")
+                shown = True
+            time.sleep(0.05)
+
+    def _sleep_ms(self, ms: int) -> None:
+        """Sleep that freezes while paused and aborts on stop."""
+        remaining = max(0, int(ms)) / 1000.0
+        while remaining > 0:
+            if self._stop:
+                return
+            if self._paused:
+                self._wait_while_paused()
+                continue
+            slice_s = min(0.05, remaining)
+            time.sleep(slice_s)
+            remaining -= slice_s
 
     def _ensure_modifier(self, modifier: Modifier) -> None:
         if modifier == self.current_modifier:
             return
-        if (
-            self.current_modifier == Modifier.SEMITONE
-            and modifier != Modifier.NATURAL
-        ):
+        # 游戏里「半音」是开关：点一下开、再点一下关；点「自然音」关不掉。
+        if self.current_modifier == Modifier.SEMITONE:
             self._tap_ui(
-                MODIFIER_TO_UI[Modifier.NATURAL],
+                MODIFIER_TO_UI[Modifier.SEMITONE],
                 self._scale_ms(self.modifier_tap_ms),
             )
             self.current_modifier = Modifier.NATURAL
@@ -137,6 +160,7 @@ class Player:
         self.touch.sleep_ms(self._scale_ms(40))
 
     def _clear_semitone(self) -> None:
+        """Turn off 半音 by tapping it again (toggle), not 自然音."""
         if self.current_modifier == Modifier.SEMITONE:
             self._ensure_modifier(Modifier.NATURAL)
 
@@ -184,7 +208,8 @@ class Player:
         self._saved_score = (self.speed, self.transpose)
         self._flash(
             "save",
-            f"已写入 {path.name} ({reason})",
+            f"已写入乐谱 {path.name}  speed=×{self.speed:.2f} "
+            f"transpose={self.transpose:+d} ({reason})",
         )
 
     def _persist_latency(self, *, reason: str) -> None:
@@ -208,8 +233,58 @@ class Player:
             flush=True,
         )
 
+    @staticmethod
+    def _read_arrow() -> str | None:
+        """Parse CSI/SS3 arrow after ESC already consumed. Never treat as quit.
+
+        Normal: ESC [ A/B/C/D   Application: ESC O A/B/C/D
+        Modified: ESC [ 1 ; N A  → still ends with A/B/C/D
+        """
+        # Under load the rest of the sequence can lag past 40ms — that race
+        # used to look like bare Esc and abort playback.
+        if not select.select([sys.stdin], [], [], 0.15)[0]:
+            return None
+        ch2 = sys.stdin.read(1)
+        if ch2 == "[":
+            body = ""
+            while select.select([sys.stdin], [], [], 0.15)[0]:
+                c = sys.stdin.read(1)
+                if not c:
+                    break
+                body += c
+                if ("A" <= c <= "Z") or ("a" <= c <= "z") or c == "~":
+                    break
+            if not body:
+                return None
+            final = body[-1]
+        elif ch2 == "O":
+            if not select.select([sys.stdin], [], [], 0.15)[0]:
+                return None
+            final = sys.stdin.read(1)
+        else:
+            return None
+        return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(final)
+
+    def _apply_arrow(self, direction: str) -> None:
+        if direction == "up":
+            self.transpose = clamp_transpose(self.transpose + 12)
+            self._flash("octave", "▲ 升八度")
+        elif direction == "down":
+            self.transpose = clamp_transpose(self.transpose - 12)
+            self._flash("octave", "▼ 降八度")
+        elif direction == "right":
+            self.transpose = clamp_transpose(nudge_diatonic_key(self.transpose, +1))
+            self._flash("key", "→ 升调")
+        elif direction == "left":
+            self.transpose = clamp_transpose(nudge_diatonic_key(self.transpose, -1))
+            self._flash("key", "← 降调")
+
+    def _nudge_speed(self, delta: float, label: str) -> None:
+        self.speed = max(0.25, min(3.0, round(self.speed + delta, 2)))
+        self._flash("speed", label)
+
     def _input_listener(self) -> None:
-        """TTY hotkeys. Arrow keys arrive as ESC [ A/B/C/D."""
+        """TTY hotkeys. Arrow keys: ESC [ A/B/C/D or ESC O A/B/C/D."""
         if not sys.stdin.isatty():
             return
         fd = sys.stdin.fileno()
@@ -222,37 +297,14 @@ class Player:
                     continue
                 ch = sys.stdin.read(1)
                 if ch == "\x1b":
-                    # Escape sequence or bare Esc
-                    if select.select([sys.stdin], [], [], 0.04)[0]:
-                        ch2 = sys.stdin.read(1)
-                        if ch2 == "[" and select.select([sys.stdin], [], [], 0.04)[0]:
-                            ch3 = sys.stdin.read(1)
-                            if ch3 == "A":  # up → +octave
-                                self.transpose = clamp_transpose(self.transpose + 12)
-                                self._flash("octave", "▲ 升八度")
-                            elif ch3 == "B":  # down → −octave
-                                self.transpose = clamp_transpose(self.transpose - 12)
-                                self._flash("octave", "▼ 降八度")
-                            elif ch3 == "C":  # right → next key CDEFGAB
-                                self.transpose = clamp_transpose(
-                                    nudge_diatonic_key(self.transpose, +1)
-                                )
-                                self._flash("key", "→ 升调")
-                            elif ch3 == "D":  # left → prev key
-                                self.transpose = clamp_transpose(
-                                    nudge_diatonic_key(self.transpose, -1)
-                                )
-                                self._flash("key", "← 降调")
-                        # else: ignore other ESC sequences
-                    else:
-                        self._stop = True
-                        _cprint("dim", "\n  ▶ stop")
-                elif ch == "]":
-                    self.speed = min(3.0, round(self.speed + 0.05, 2))
-                    self._flash("speed", "] 加速")
-                elif ch == "[":
-                    self.speed = max(0.25, round(self.speed - 0.05, 2))
-                    self._flash("speed", "[ 减速")
+                    direction = self._read_arrow()
+                    if direction:
+                        self._apply_arrow(direction)
+                    # bare Esc / unknown sequence: ignore (only q stops)
+                elif ch in ("]", "+", "="):
+                    self._nudge_speed(+0.05, f"{ch} 加速")
+                elif ch in ("[", "-", "_"):
+                    self._nudge_speed(-0.05, f"{ch} 减速")
                 elif ch in ("z", "Z"):
                     self.press_early_ms = max(0, self.press_early_ms - 50)
                     self._flash("early", "z press_early −50")
@@ -268,7 +320,14 @@ class Player:
                 elif ch in ("s", "S"):
                     self._persist_score(reason="key")
                     self._persist_latency(reason="key")
+                elif ch in ("p", "P"):
+                    self._paused = not self._paused
+                    if self._paused:
+                        _cprint("dim", "\n  ▶ 暂停")
+                    else:
+                        _cprint("dim", "\n  ▶ 继续")
                 elif ch in ("q", "Q"):
+                    self._paused = False
                     self._stop = True
                     _cprint("dim", "\n  ▶ stop")
         except Exception:  # noqa: BLE001
@@ -307,23 +366,29 @@ class Player:
                 flush=True,
             )
             print(
-                f"{_C['dim']}  键: [/] 减速加速  "
+                f"{_C['dim']}  键: [/][+/-] 减速加速  "
                 f"{_C['key']}←→ 降调升调(CDEFGAB){_C['dim']}  "
                 f"{_C['octave']}↑↓ ±八度{_C['dim']}  "
                 f"{_C['early']}z/x early±50{_C['dim']}  "
                 f"{_C['hold']}c/v hold±50{_C['dim']}  "
-                f"{_C['save']}s 写入乐谱{_C['dim']}  q 停"
+                f"{_C['save']}s 写入乐谱  "
+                f"{_C['dim']}p 暂停/继续  q 停"
                 f"{_C['reset']}",
                 flush=True,
             )
 
         self._stop = False
+        self._paused = False
         aborted = False
         listener = threading.Thread(target=self._input_listener, daemon=True)
         listener.start()
 
         try:
             for ev in score.events:
+                if self._stop:
+                    aborted = True
+                    break
+                self._wait_while_paused()
                 if self._stop:
                     aborted = True
                     break
@@ -349,7 +414,7 @@ class Player:
                     ms = self._scale_ms(ms)
                     if verbose:
                         print(f"  rest {ms}ms ×{self.speed:.2f}", flush=True)
-                    self.touch.sleep_ms(ms)
+                    self._sleep_ms(ms)
                 elif isinstance(ev, LyricMark):
                     if verbose:
                         print(f"  ▶ {ev.text}", flush=True)
@@ -361,11 +426,15 @@ class Player:
                 self._clear_semitone()
             except Exception:  # noqa: BLE001
                 pass
-
-        if (self.speed, self.transpose) != self._saved_score:
-            self._persist_score(reason="end" if not aborted else "stop")
-        if (self.press_early_ms, self.hold_extra_ms) != self._saved_latency:
-            self._persist_latency(reason="end" if not aborted else "stop")
+            # Persist even on KeyboardInterrupt — 倍速/移调只进当前乐谱
+            reason = "stop" if aborted else "end"
+            try:
+                if (self.speed, self.transpose) != self._saved_score:
+                    self._persist_score(reason=reason)
+                if (self.press_early_ms, self.hold_extra_ms) != self._saved_latency:
+                    self._persist_latency(reason=reason)
+            except Exception:  # noqa: BLE001
+                pass
 
         if verbose:
             print("stopped." if aborted else "done.", flush=True)

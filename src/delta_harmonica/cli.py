@@ -79,14 +79,21 @@ def _complete_scores(incomplete: str) -> list[str]:
 
 
 def _complete_profiles(incomplete: str) -> list[str]:
-    d = profiles_dir()
-    if not d.is_dir():
-        return []
     names: list[str] = []
-    for f in sorted(d.glob("*.json")):
-        for cand in (f.stem, f.name):
-            if cand.startswith(incomplete) and cand not in names:
-                names.append(cand)
+    # Prefer dharm.toml default even if the json is not created yet (calibrate).
+    try:
+        cfg_profile = load_config().profile
+    except Exception:  # noqa: BLE001
+        cfg_profile = None
+    if cfg_profile and cfg_profile.startswith(incomplete) and cfg_profile not in names:
+        names.append(cfg_profile)
+
+    d = profiles_dir()
+    if d.is_dir():
+        for f in sorted(d.glob("*.json")):
+            for cand in (f.stem, f.name):
+                if cand.startswith(incomplete) and cand not in names:
+                    names.append(cand)
     return names
 
 
@@ -213,11 +220,16 @@ def doctor_cmd(
 
 @app.command("calibrate")
 def calibrate_cmd(
-    profile: str = typer.Option(
-        ...,
+    profile: Optional[str] = typer.Argument(
+        None,
+        help="Profile name to write/load (same as -p)",
+        autocompletion=_complete_profiles,
+    ),
+    profile_opt: Optional[str] = typer.Option(
+        None,
         "--profile",
         "-p",
-        help="Profile name to write/load",
+        help="Profile name to write/load (same as positional)",
         autocompletion=_complete_profiles,
     ),
     test: bool = typer.Option(False, "--test", help="Tap each calibrated key to verify"),
@@ -233,9 +245,16 @@ def calibrate_cmd(
     dry_run: bool = typer.Option(False, "--dry-run", help="With --test: print only"),
 ) -> None:
     """Calibrate UI key positions via clicks on the scrcpy window."""
+    profile_name = profile_opt or profile
+    if not profile_name:
+        _die(
+            "need profile name\n"
+            "  ./dharm calibrate myphone\n"
+            "  ./dharm calibrate -p myphone"
+        )
     if test:
         try:
-            path = resolve_profile_path(profile)
+            path = resolve_profile_path(profile_name)
             prof = load_profile(path)
         except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
             _die(str(exc))
@@ -253,7 +272,7 @@ def calibrate_cmd(
             _die(str(exc))
     try:
         path = run_calibrate(
-            profile,
+            profile_name,
             serial=serial,
             window_id=window_id,
             window_rect=rect,

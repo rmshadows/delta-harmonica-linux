@@ -6,7 +6,12 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from delta_harmonica.adb_util import get_display_size, get_wm_size, pick_serial
+from delta_harmonica.adb_util import (
+    get_display_size,
+    get_wm_size,
+    pick_serial,
+    resolve_display_size_for_window,
+)
 from delta_harmonica.geometry import Rect, fit_content_rect
 from delta_harmonica.models import Point, Profile, UI_KEY_LABELS, UI_KEYS
 from delta_harmonica.profile_io import save_profile
@@ -84,7 +89,6 @@ def run_calibrate(
 ) -> Path:
     serial = pick_serial(serial)
     physical = get_wm_size(serial)
-    dw, dh = get_display_size(serial)
 
     tracked_wid = window_id
     fixed_geometry = window_rect is not None and window_id is None
@@ -103,7 +107,16 @@ def run_calibrate(
             f"+{window_rect.x}+{window_rect.y}"
         )
 
+    dw, dh = resolve_display_size_for_window(
+        serial, window_rect.width, window_rect.height
+    )
+    raw = get_display_size(serial)
     print(f"display size (touch coords): {dw}x{dh}")
+    if raw != (dw, dh):
+        print(
+            f"note: adjusted orientation for window "
+            f"(adb reported {raw[0]}x{raw[1]})"
+        )
     if (physical[0], physical[1]) != (dw, dh):
         print(
             f"physical wm size: {physical[0]}x{physical[1]} "
