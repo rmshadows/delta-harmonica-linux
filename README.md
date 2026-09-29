@@ -75,7 +75,7 @@ countdown = 1
 
 ```bash
 dharm play beijiaer
-# 播放中：+ / ] 加速，- / [ 减速；←→↑↓ 移调；p 暂停/继续；s 写入本乐谱；q 停止
+# 播放中：+ / ] 加速，- / [ 减速；f/g ±八度；h/j 升降调；p 暂停/继续；s 写入本乐谱；q 停止
 ```
 
 用法：乐谱放在**最后**：
@@ -121,7 +121,7 @@ dharm midi2txt song.mid -o scores/song.txt --bpm 96
 | `dharm calibrate NAME` | 在 scrcpy 窗口上依次点击标定（`-p NAME` 亦可） |
 | `dharm calibrate NAME --test` | 按标定依次触达各键（听音确认） |
 | `dharm list` | 列出 `scores/` 下乐谱 |
-| `dharm play SCORE [-p NAME]` | 练习辅助；`[/]`/`+/-` 调速、`←→` 调、`↑↓` ±八度、`p` 暂停、`z/x` early、`c/v` hold、`s` 写入该乐谱、`q` 停 |
+| `dharm play SCORE [-p NAME]` | 练习辅助；`[/]`/`+/-` 调速、`f/g` ±八度、`h/j` 升降调、`p` 暂停、`z/x` early、`c/v` hold、`s` 写入该乐谱、`q` 停 |
 | `dharm --install-completion` | 安装 shell 自动补全 |
 | `dharm midi2txt FILE.mid` | MIDI → txt 草稿 |
 | `dharm preview` | 浏览器听谱预览（不连手机） |

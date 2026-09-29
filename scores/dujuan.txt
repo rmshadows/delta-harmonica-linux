@@ -6,8 +6,7 @@ title: 杜鹃圆舞曲
 bpm: 144
 
 # —— A 唱歌的小杜鹃 ——
-speed: 1.50
-transpose: 0
+speed: 1.60
 > 布谷
 #3/4 |
 > 布谷

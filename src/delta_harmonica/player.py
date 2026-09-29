@@ -265,26 +265,31 @@ class Player:
             return None
         return {"A": "up", "B": "down", "C": "right", "D": "left"}.get(final)
 
+    def _nudge_octave(self, delta: int) -> None:
+        self.transpose = clamp_transpose(self.transpose + 12 * delta)
+        self._flash("octave", "f 升八度" if delta > 0 else "g 降八度")
+
+    def _nudge_key(self, delta: int) -> None:
+        self.transpose = clamp_transpose(nudge_diatonic_key(self.transpose, delta))
+        self._flash("key", "h 升调" if delta > 0 else "j 降调")
+
     def _apply_arrow(self, direction: str) -> None:
+        """Kept for tests. Playback no longer binds arrows (they mis-fire)."""
         if direction == "up":
-            self.transpose = clamp_transpose(self.transpose + 12)
-            self._flash("octave", "▲ 升八度")
+            self._nudge_octave(+1)
         elif direction == "down":
-            self.transpose = clamp_transpose(self.transpose - 12)
-            self._flash("octave", "▼ 降八度")
+            self._nudge_octave(-1)
         elif direction == "right":
-            self.transpose = clamp_transpose(nudge_diatonic_key(self.transpose, +1))
-            self._flash("key", "→ 升调")
+            self._nudge_key(+1)
         elif direction == "left":
-            self.transpose = clamp_transpose(nudge_diatonic_key(self.transpose, -1))
-            self._flash("key", "← 降调")
+            self._nudge_key(-1)
 
     def _nudge_speed(self, delta: float, label: str) -> None:
         self.speed = max(0.25, min(3.0, round(self.speed + delta, 2)))
         self._flash("speed", label)
 
     def _input_listener(self) -> None:
-        """TTY hotkeys. Arrow keys: ESC [ A/B/C/D or ESC O A/B/C/D."""
+        """TTY hotkeys. Pitch: f/g octave, h/j key. Arrows are ignored."""
         if not sys.stdin.isatty():
             return
         fd = sys.stdin.fileno()
@@ -297,10 +302,16 @@ class Player:
                     continue
                 ch = sys.stdin.read(1)
                 if ch == "\x1b":
-                    direction = self._read_arrow()
-                    if direction:
-                        self._apply_arrow(direction)
-                    # bare Esc / unknown sequence: ignore (only q stops)
+                    # Swallow arrow sequences so they don't change the key.
+                    self._read_arrow()
+                elif ch in ("f", "F"):
+                    self._nudge_octave(+1)
+                elif ch in ("g", "G"):
+                    self._nudge_octave(-1)
+                elif ch in ("h", "H"):
+                    self._nudge_key(+1)
+                elif ch in ("j", "J"):
+                    self._nudge_key(-1)
                 elif ch in ("]", "+", "="):
                     self._nudge_speed(+0.05, f"{ch} 加速")
                 elif ch in ("[", "-", "_"):
@@ -367,8 +378,8 @@ class Player:
             )
             print(
                 f"{_C['dim']}  键: [/][+/-] 减速加速  "
-                f"{_C['key']}←→ 降调升调(CDEFGAB){_C['dim']}  "
-                f"{_C['octave']}↑↓ ±八度{_C['dim']}  "
+                f"{_C['octave']}f/g 升八度/降八度{_C['dim']}  "
+                f"{_C['key']}h/j 升调/降调(CDEFGAB){_C['dim']}  "
                 f"{_C['early']}z/x early±50{_C['dim']}  "
                 f"{_C['hold']}c/v hold±50{_C['dim']}  "
                 f"{_C['save']}s 写入乐谱  "
@@ -424,15 +435,6 @@ class Player:
             self._stop = True
             try:
                 self._clear_semitone()
-            except Exception:  # noqa: BLE001
-                pass
-            # Persist even on KeyboardInterrupt — 倍速/移调只进当前乐谱
-            reason = "stop" if aborted else "end"
-            try:
-                if (self.speed, self.transpose) != self._saved_score:
-                    self._persist_score(reason=reason)
-                if (self.press_early_ms, self.hold_extra_ms) != self._saved_latency:
-                    self._persist_latency(reason=reason)
             except Exception:  # noqa: BLE001
                 pass
 

@@ -12,7 +12,7 @@ press_early = 100
 # 模式2 hold_extra：每个音多按住多少 ms
 hold_extra = 0
 # 净起音间隔 ≈ 谱面时值 + hold_extra - press_early
-# 播放中 z/x 调 press_early、c/v 调 hold_extra（步长 50），结束写回本文件
+# 播放中 z/x 调 press_early、c/v 调 hold_extra（步长 50）；按 s 才写回本文件
 
 # 开奏倒计时秒数
 countdown = 1
